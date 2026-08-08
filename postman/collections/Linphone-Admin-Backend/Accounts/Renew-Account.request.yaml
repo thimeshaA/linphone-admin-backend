@@ -1,0 +1,39 @@
+$kind: http-request
+name: Renew Account
+method: PATCH
+url: '{{baseUrl}}/api/accounts/{{accountId}}/renew'
+order: 1003
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "expires_at": null
+    }
+description: |-
+  ## Purpose
+  Extends the expiry date of an existing SIP account. If the new `expires_at` is in the future, it also resets the account's status to `active` and clears any stale `expired_at` flag.
+
+  ## Use Case
+  Called when a customer's SIP account subscription is renewed — either manually by a reseller or triggered by a billing event.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - Both admins and resellers can renew accounts.
+  - **Resellers** can only renew accounts they own; requesting another reseller's account returns **404**.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` — the numeric id of the SIP account to renew.
+  - **Optional body field:**
+    - `expires_at` (ISO date string) — new expiry date. Defaults to +6 months from now if omitted or `null`.
+
+  ## Responses
+  - **200 OK** — account renewed; `expires_at` updated and status reset to `active` if the new date is in the future.
+  - **404 Not Found** — account does not exist, or reseller does not own it.
+  - **401 Unauthorized** — missing or invalid auth token.
+
+  ## Notes
+  Renewing an account never touches `disabled_at`. Disabling and expiring are treated as two independent states — a renewed account can still be disabled.

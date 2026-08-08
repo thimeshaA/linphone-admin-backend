@@ -1,0 +1,29 @@
+$kind: http-request
+name: Get Account By Id
+method: GET
+url: '{{baseUrl}}/api/accounts/1'
+order: 1001
+description: |-
+  ## Purpose
+  Fetches a single SIP account by its `id`. Applies the same ownership scoping as the list endpoint — resellers can only retrieve accounts they created.
+
+  ## Use Case
+  Used when the frontend needs to display or pre-fill the details of a specific SIP account, for example when opening an account's edit view.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admins** can fetch any account.
+  - **Resellers** can only fetch accounts where `creator_id` matches their own id.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` — the numeric id of the SIP account to fetch.
+  - No body or query params.
+
+  ## Responses
+  - **200 OK** — single account object. The `password` field is never included.
+  - **404 Not Found** — account does not exist, or a reseller is requesting an account they don't own (intentionally returns 404 instead of 403 to avoid revealing the row exists).
+  - **401 Unauthorized** — missing or invalid auth token.
+
+  ## Notes
+  The 404-instead-of-403 pattern for reseller scope violations is intentional — it prevents resellers from probing for the existence of accounts they don't own.

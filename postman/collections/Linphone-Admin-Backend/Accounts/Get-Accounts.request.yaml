@@ -1,0 +1,39 @@
+$kind: http-request
+name: Get Accounts
+method: GET
+url: '{{baseUrl}}/api/accounts'
+order: 1000
+params:
+  - key: status
+    value: ''
+    disabled: true
+    description: 'Filter by account status (e.g. active, inactive)'
+  - key: search
+    value: ''
+    disabled: true
+    description: 'Search by authid or domain'
+description: |-
+  ## Purpose
+  Lists all SIP accounts from the `auth_users` table. Admins see every account across all resellers; resellers only see accounts they created.
+
+  ## Use Case
+  Used by the frontend dashboard to populate the accounts list. A reseller logs in and sees only their own provisioned SIP accounts; an admin sees the full picture across all resellers.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admins** see all accounts and receive an extra `created_by` field (resolved via a second query to `auth_admins`).
+  - **Resellers** only see accounts where `creator_id` matches their own id; `created_by` is never returned.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - No body or URL params required.
+  - **Optional query params:**
+    - `?status=` — filter accounts by status (e.g. `active`, `inactive`).
+    - `?search=` — partial match against `authid` or `domain`.
+
+  ## Responses
+  - **200 OK** — array of account objects. The `password` field is never included.
+  - **401 Unauthorized** — missing or invalid auth token.
+
+  ## Notes
+  The `created_by` field is only present for admin responses and is resolved from a separate `auth_admins` database (cannot be JOINed directly). Resellers never see this field regardless of query params.

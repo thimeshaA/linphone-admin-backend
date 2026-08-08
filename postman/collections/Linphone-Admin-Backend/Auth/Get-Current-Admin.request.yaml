@@ -1,0 +1,26 @@
+$kind: http-request
+name: Get Current Admin
+method: GET
+url: '{{baseUrl}}/api/auth/me'
+order: 3000
+description: |-
+  ## Purpose
+  Returns the identity of the currently logged-in user based on the auth cookie. Used by the frontend to restore session state without requiring a new login.
+
+  ## Use Case
+  Called on page load by the frontend to check whether the user is still logged in and to retrieve their `id`, `username`, and `role` for rendering the correct UI.
+
+  ## Authentication
+  - Requires a valid auth cookie (`verifyToken`).
+  - Works for both the primary admin and any reseller — whoever is currently logged in.
+  - Returns **401** if the cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - No body, URL params, or query params needed.
+
+  ## Responses
+  - **200 OK** — `{ id, username, role }` of the currently authenticated user.
+  - **401 Unauthorized** — auth cookie is missing, invalid, or the JWT has expired.
+
+  ## Notes
+  This is the primary mechanism for the frontend to determine the logged-in user's role and decide which views and actions to show.

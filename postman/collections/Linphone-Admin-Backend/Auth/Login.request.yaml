@@ -1,0 +1,37 @@
+$kind: http-request
+name: Login
+method: POST
+url: '{{baseUrl}}/api/auth/login'
+order: 1000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "username": "{{adminUsername}}",
+      "password": "{{adminPassword}}"
+    }
+description: |-
+  ## Purpose
+  Authenticates a user (primary admin or reseller) against `auth_admins` and issues a session cookie. The JWT token is never exposed in the response body.
+
+  ## Use Case
+  Called when the admin or a reseller opens the login page and submits their credentials. On success, the browser receives an httpOnly cookie that is automatically sent with all subsequent requests.
+
+  ## Authentication
+  - No prior authentication required — this is the entry point.
+
+  ## Request Requirements
+  - **Required body fields:**
+    - `username` (string) — the account's login username.
+    - `password` (string) — the account's plaintext password (verified against the bcrypt hash).
+
+  ## Responses
+  - **200 OK** — login successful. Sets an httpOnly, `sameSite=strict` cookie containing a JWT (1 hour expiry). The token itself is not in the response body.
+  - **401 Unauthorized** — wrong username or password. The response does not reveal which was incorrect.
+  - **403 Forbidden** — credentials are correct but the account's status is `disabled`. This check happens after password validation.
+
+  ## Notes
+  The generic 401 for wrong credentials (without specifying username vs. password) is intentional to prevent user enumeration. The 403 for disabled accounts is only returned after the password has been validated successfully.

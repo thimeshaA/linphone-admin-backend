@@ -1,0 +1,8 @@
+$kind: collection
+name: Linphone Admin Backend
+variables:
+  baseUrl: http://localhost:4000
+  adminUsername: admin
+  adminPassword: ""
+  resellerUsername: ""
+  resellerPassword: ""

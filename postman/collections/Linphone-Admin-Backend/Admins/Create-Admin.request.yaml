@@ -1,0 +1,41 @@
+$kind: http-request
+name: Create Admin
+method: POST
+url: '{{baseUrl}}/api/admins'
+order: 2002
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "username": "newadmin",
+      "password": "securepassword"
+    }
+description: |-
+  ## Purpose
+  Creates a new reseller account in `auth_admins`. Every account created through this endpoint is hardcoded to `role: reseller`.
+
+  ## Use Case
+  Called when the admin onboards a new reseller who needs access to the system to provision and manage SIP accounts.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admin-only** — resellers receive **403 Forbidden**.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **Required body fields:**
+    - `username` (string) — unique login username for the reseller, e.g. `"newreseller"`.
+    - `password` (string) — plaintext password; hashed server-side with bcrypt.
+  - No `role` field is accepted — it is always set to `reseller` server-side.
+
+  ## Responses
+  - **201 Created** — reseller account created successfully.
+  - **409 Conflict** — a reseller with the same `username` already exists.
+  - **403 Forbidden** — caller is a reseller.
+  - **401 Unauthorized** — missing or invalid auth token.
+
+  ## Notes
+  Only one primary admin account is allowed to exist, and it is created manually via direct SQL — never through this API. The bcrypt password hashing used here is intentionally different from the `MD5(authid:domain:password)` scheme used for SIP accounts in `auth_users`.

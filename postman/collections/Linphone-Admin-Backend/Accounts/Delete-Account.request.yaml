@@ -1,0 +1,29 @@
+$kind: http-request
+name: Delete Account
+method: DELETE
+url: '{{baseUrl}}/api/accounts/{{accountId}}'
+order: 1005
+description: |-
+  ## Purpose
+  Permanently removes a SIP account from `auth_users`. This action is irreversible and is restricted to admins only.
+
+  ## Use Case
+  Called by an admin when a SIP account needs to be fully deprovisioned — for example, when a customer relationship ends and the account should no longer exist at all.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admin-only** — resellers always receive **403 Forbidden**, regardless of whether they own the account.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` — the numeric id of the SIP account to delete.
+  - No body or query params.
+
+  ## Responses
+  - **200 OK** — account permanently deleted. Returns a simple success confirmation, not the deleted row.
+  - **403 Forbidden** — caller is a reseller; deletion is not permitted for this role.
+  - **404 Not Found** — account does not exist.
+  - **401 Unauthorized** — missing or invalid auth token.
+
+  ## Notes
+  Deletion is intentionally admin-only per the authorization matrix. Resellers should use Disable Account to suspend access without permanently removing the record.

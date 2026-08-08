@@ -1,0 +1,23 @@
+$kind: http-request
+name: Logout
+method: POST
+url: '{{baseUrl}}/api/auth/logout'
+order: 2000
+description: |-
+  ## Purpose
+  Ends the current session by clearing the auth cookie. After this call, the browser no longer sends a valid token with subsequent requests.
+
+  ## Use Case
+  Called when the user clicks "Log out" in the frontend. Ensures the session is cleanly terminated on both the client and server side.
+
+  ## Authentication
+  - Should be called while logged in, but does not strictly require a valid token — clearing the cookie is safe to call regardless.
+
+  ## Request Requirements
+  - No body, URL params, or query params needed.
+
+  ## Responses
+  - **200 OK** — auth cookie cleared; session ended.
+
+  ## Notes
+  The JWT itself is stateless — logout works by clearing the cookie so the token is no longer sent. There is no server-side token blacklist.
