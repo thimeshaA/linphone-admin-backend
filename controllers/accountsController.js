@@ -1,0 +1,129 @@
+const crypto = require('crypto');
+const {
+  listAccounts,
+  getAccountById,
+  findAccountByAuthidDomain,
+  createAccount,
+  renewAccount,
+  disableAccount,
+  updateAccountPassword,
+  deleteAccount,
+} = require('../models/accountModel');
+const { getAdminStatusById, findAdminUsernamesByIds } = require('../models/adminModel');
+
+function hashPassword(authid, domain, password) {
+  return crypto.createHash('md5').update(`${authid}:${domain}:${password}`).digest('hex');
+}
+
+function defaultExpiresAt() {
+  const date = new Date();
+  date.setMonth(date.getMonth() + 6);
+  return date;
+}
+
+async function list(req, res) {
+  const { status, search } = req.query;
+  const accounts = await listAccounts(req.scopeFilter, { status, search });
+
+  if (req.admin.role === 'admin') {
+    const creatorIds = [...new Set(accounts.map((account) => account.creator_id))];
+    const usernameMap = await findAdminUsernamesByIds(creatorIds);
+    for (const account of accounts) {
+      account.created_by = usernameMap[account.creator_id] || null;
+    }
+  }
+
+  return res.json(accounts);
+}
+
+async function getOne(req, res) {
+  const account = await getAccountById(req.params.id, req.scopeFilter);
+
+  if (!account) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+
+  return res.json(account);
+}
+
+async function create(req, res) {
+  const { authid, domain, password, status, expires_at, creator_id } = req.body;
+
+  if (!authid || !domain || !password) {
+    return res.status(400).json({ error: 'authid, domain and password are required' });
+  }
+
+  const creator = await getAdminStatusById(creator_id);
+  if (!creator) {
+    return res.status(400).json({ error: 'creator_id does not reference an existing admin' });
+  }
+  if (creator.status === 'disabled') {
+    return res.status(400).json({ error: 'Cannot assign account to a disabled reseller' });
+  }
+
+  const existing = await findAccountByAuthidDomain(authid, domain);
+  if (existing) {
+    return res.status(409).json({ error: 'An account with this authid and domain already exists' });
+  }
+
+  const account = await createAccount({
+    authid,
+    domain,
+    passwordHash: hashPassword(authid, domain, password),
+    status: status || 'active',
+    expiresAt: expires_at || defaultExpiresAt(),
+    creatorId: creator_id,
+  });
+
+  return res.status(201).json(account);
+}
+
+async function renew(req, res) {
+  const { expires_at } = req.body;
+  const expiresAt = expires_at || defaultExpiresAt();
+
+  const account = await renewAccount(req.params.id, req.scopeFilter, expiresAt);
+  if (!account) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+
+  return res.json(account);
+}
+
+async function disable(req, res) {
+  const account = await disableAccount(req.params.id, req.scopeFilter);
+  if (!account) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+
+  return res.json(account);
+}
+
+async function updatePassword(req, res) {
+  const { password } = req.body;
+
+  if (!password) {
+    return res.status(400).json({ error: 'password is required' });
+  }
+
+  const account = await getAccountById(req.params.id, req.scopeFilter);
+  if (!account) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+
+  const passwordHash = hashPassword(account.authid, account.domain, password);
+  await updateAccountPassword(req.params.id, req.scopeFilter, passwordHash);
+
+  return res.json({ message: 'Password updated successfully' });
+}
+
+async function remove(req, res) {
+  const deleted = await deleteAccount(req.params.id);
+  if (!deleted) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+
+  return res.json({ message: 'Account deleted successfully' });
+}
+
+module.exports = { list, getOne, create, renew, disable, updatePassword, remove };
