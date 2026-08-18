@@ -1,0 +1,30 @@
+$kind: http-request
+name: Reject Request
+method: PATCH
+url: '{{baseUrl}}/api/requests/1/reject'
+order: 1004
+description: |-
+  ## Purpose
+  Rejects a pending request (either `reseller` or `esim`) without creating any account.
+
+  ## Use Case
+  Called by the admin when a request should be declined — for example, incomplete or ineligible details in the `payload`.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admin-only** — resellers receive **403 Forbidden**.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` — the numeric id of the request to reject. Must currently be `status: pending`.
+  - No body fields are required.
+
+  ## Responses
+  - **200 OK** — request marked `rejected` with `reviewed_by`/`reviewed_at` set.
+  - **400 Bad Request** — request has already been reviewed (not `pending`).
+  - **404 Not Found** — no request with that id exists.
+  - **403 Forbidden** — caller is a reseller.
+  - **401 Unauthorized** — missing or invalid auth token.
+
+  ## Notes
+  Unlike Approve, this works for both `reseller` and `esim` requests.

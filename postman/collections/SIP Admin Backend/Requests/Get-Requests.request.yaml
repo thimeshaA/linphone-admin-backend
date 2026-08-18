@@ -1,0 +1,37 @@
+$kind: http-request
+name: Get Requests
+method: GET
+url: '{{baseUrl}}/api/requests'
+order: 1001
+params:
+  - key: type
+    value: ''
+    disabled: true
+    description: 'Filter by request type (reseller or esim)'
+  - key: status
+    value: ''
+    disabled: true
+    description: 'Filter by request status (pending, approved or rejected)'
+description: |-
+  ## Purpose
+  Lists all reseller/eSIM requests from the `requests` table.
+
+  ## Use Case
+  Used by the admin dashboard to review incoming requests — for example, to find all pending reseller requests awaiting approval.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admin-only** — resellers receive **403 Forbidden**.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - No body required.
+  - **Optional query params:**
+    - `?type=` — filter by `reseller` or `esim`.
+    - `?status=` — filter by `pending`, `approved` or `rejected`.
+
+  ## Responses
+  - **200 OK** — array of request objects, most recent first.
+  - **400 Bad Request** — `type` or `status` filter value is invalid.
+  - **403 Forbidden** — caller is a reseller.
+  - **401 Unauthorized** — missing or invalid auth token.
