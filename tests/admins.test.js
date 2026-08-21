@@ -55,6 +55,14 @@ function wireMocks() {
     if (adminsByUsername[row.username]) adminsByUsername[row.username].password_hash = passwordHash;
     return true;
   });
+
+  adminModel.deleteReseller.mockImplementation(async (id) => {
+    const row = resellersById[id];
+    if (!row) return false;
+    delete resellersById[id];
+    delete adminsByUsername[row.username];
+    return true;
+  });
 }
 
 describe('Admins (reseller management) flow', () => {
@@ -170,5 +178,32 @@ describe('Admins (reseller management) flow', () => {
 
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: 'Admin access required' });
+  });
+
+  test('12. as the reseller, DELETE /api/admins/:id is forbidden', async () => {
+    const res = await resellerAgent.delete(`/api/admins/${resellerId}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: 'Admin access required' });
+  });
+
+  test('13. deleting a non-existent reseller returns 404', async () => {
+    const res = await adminAgent.delete('/api/admins/999999');
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Reseller not found' });
+  });
+
+  test('14. as admin, delete the reseller', async () => {
+    const res = await adminAgent.delete(`/api/admins/${resellerId}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ message: 'Reseller deleted successfully' });
+  });
+
+  test('15. the deleted reseller no longer appears', async () => {
+    const res = await adminAgent.get(`/api/admins/${resellerId}`);
+
+    expect(res.status).toBe(404);
   });
 });

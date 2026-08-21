@@ -94,6 +94,13 @@ async function updateResellerPassword(id, passwordHash) {
   return result.affectedRows > 0;
 }
 
+async function deleteReseller(id) {
+  const [result] = await adminPool.query("DELETE FROM admins WHERE id = ? AND role = 'reseller'", [
+    id,
+  ]);
+  return result.affectedRows > 0;
+}
+
 module.exports = {
   findAdminByUsername,
   adminExistsById,
@@ -106,4 +113,5 @@ module.exports = {
   createReseller,
   updateResellerStatus,
   updateResellerPassword,
+  deleteReseller,
 };

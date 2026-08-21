@@ -6,6 +6,7 @@ const {
   createReseller,
   updateResellerStatus,
   updateResellerPassword,
+  deleteReseller,
 } = require('../models/adminModel');
 
 const SALT_ROUNDS = 10;
@@ -81,4 +82,14 @@ async function resetPassword(req, res) {
   return res.json({ message: 'Password reset successfully' });
 }
 
-module.exports = { list, getOne, create, updateStatus, resetPassword };
+async function remove(req, res) {
+  const deleted = await deleteReseller(req.params.id);
+
+  if (!deleted) {
+    return res.status(404).json({ error: 'Reseller not found' });
+  }
+
+  return res.json({ message: 'Reseller deleted successfully' });
+}
+
+module.exports = { list, getOne, create, updateStatus, resetPassword, remove };
