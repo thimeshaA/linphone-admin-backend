@@ -1,0 +1,39 @@
+$kind: http-request
+name: Renew Admin
+method: PATCH
+url: '{{baseUrl}}/api/admins/2/renew'
+order: 2006
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "expires_at": null
+    }
+description: |-
+  ## Purpose
+  Extends the expiry date of a reseller account. If the new `expires_at` is in the future, it also resets the reseller's status to `active` and clears any stale `expired_at` flag.
+
+  ## Use Case
+  Called when a reseller's contract/subscription is renewed, so they can continue logging in to provision and manage SIP accounts.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admin-only** — resellers receive **403 Forbidden**.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` — the numeric id of the reseller to renew.
+  - **Optional body field:**
+    - `expires_at` (ISO date string) — new expiry date. Defaults to +6 months from now if omitted or `null`.
+
+  ## Responses
+  - **200 OK** — reseller renewed; `expires_at` updated and status reset to `active` if the new date is in the future.
+  - **404 Not Found** — no reseller with that id exists.
+  - **403 Forbidden** — caller is a reseller.
+  - **401 Unauthorized** — missing or invalid auth token.
+
+  ## Notes
+  Once `expires_at` passes, the reseller is not blocked immediately by any background job — expiry is checked lazily at login time. The first login attempt after the expiry date returns **403 "Account has expired"** and flips `status` to `expired` server-side. Renewing before or after that point with a future date clears it back to `active`.

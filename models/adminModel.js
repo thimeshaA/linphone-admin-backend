@@ -2,7 +2,7 @@ const { adminPool } = require('../config/db');
 
 async function findAdminByUsername(username) {
   const [rows] = await adminPool.query(
-    'SELECT id, username, password_hash, role, status, created_at FROM admins WHERE username = ? LIMIT 1',
+    'SELECT id, username, password_hash, role, status, expires_at, expired_at, created_at FROM admins WHERE username = ? LIMIT 1',
     [username]
   );
   return rows[0] || null;
@@ -32,7 +32,7 @@ async function findAdminUsernamesByIds(ids) {
 
 async function findAdminById(id) {
   const [rows] = await adminPool.query(
-    'SELECT id, username, password_hash, role, status, created_at FROM admins WHERE id = ? LIMIT 1',
+    'SELECT id, username, password_hash, role, status, expires_at, expired_at, created_at FROM admins WHERE id = ? LIMIT 1',
     [id]
   );
   return rows[0] || null;
@@ -47,7 +47,8 @@ async function updatePasswordById(id, passwordHash) {
 }
 
 async function listResellers(status) {
-  let query = "SELECT id, username, role, status, created_at FROM admins WHERE role = 'reseller'";
+  let query =
+    "SELECT id, username, role, status, expires_at, expired_at, created_at FROM admins WHERE role = 'reseller'";
   const params = [];
 
   if (status) {
@@ -63,18 +64,44 @@ async function listResellers(status) {
 
 async function getResellerById(id) {
   const [rows] = await adminPool.query(
-    "SELECT id, username, role, status, created_at FROM admins WHERE id = ? AND role = 'reseller' LIMIT 1",
+    "SELECT id, username, role, status, expires_at, expired_at, created_at FROM admins WHERE id = ? AND role = 'reseller' LIMIT 1",
     [id]
   );
   return rows[0] || null;
 }
 
-async function createReseller({ username, passwordHash }) {
+async function createReseller({ username, passwordHash, expiresAt }) {
   const [result] = await adminPool.query(
-    "INSERT INTO admins (username, password_hash, role, status) VALUES (?, ?, 'reseller', 'active')",
-    [username, passwordHash]
+    "INSERT INTO admins (username, password_hash, role, status, expires_at) VALUES (?, ?, 'reseller', 'active', ?)",
+    [username, passwordHash, expiresAt]
   );
-  return { id: result.insertId, username, role: 'reseller', status: 'active' };
+  return { id: result.insertId, username, role: 'reseller', status: 'active', expires_at: expiresAt, expired_at: null };
+}
+
+async function renewReseller(id, expiresAt) {
+  const isFuture = new Date(expiresAt) > new Date();
+
+  let sql = "UPDATE admins SET expires_at = ?";
+  const params = [expiresAt];
+
+  if (isFuture) {
+    sql += ", status = 'active', expired_at = NULL";
+  }
+
+  sql += " WHERE id = ? AND role = 'reseller'";
+  params.push(id);
+
+  const [result] = await adminPool.query(sql, params);
+
+  if (result.affectedRows === 0) return null;
+  return getResellerById(id);
+}
+
+async function markResellerExpired(id) {
+  await adminPool.query(
+    "UPDATE admins SET status = 'expired', expired_at = NOW() WHERE id = ? AND role = 'reseller' AND status = 'active'",
+    [id]
+  );
 }
 
 async function updateResellerStatus(id, status) {
@@ -114,4 +141,6 @@ module.exports = {
   updateResellerStatus,
   updateResellerPassword,
   deleteReseller,
+  renewReseller,
+  markResellerExpired,
 };

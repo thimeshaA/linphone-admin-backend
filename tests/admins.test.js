@@ -33,12 +33,36 @@ function wireMocks() {
     return row ? { ...row } : null;
   });
 
-  adminModel.createReseller.mockImplementation(async ({ username, passwordHash }) => {
+  adminModel.createReseller.mockImplementation(async ({ username, passwordHash, expiresAt }) => {
     const id = nextId++;
-    const publicRow = { id, username, role: 'reseller', status: 'active', created_at: new Date() };
+    const publicRow = {
+      id,
+      username,
+      role: 'reseller',
+      status: 'active',
+      expires_at: expiresAt,
+      expired_at: null,
+      created_at: new Date(),
+    };
     resellersById[id] = publicRow;
     adminsByUsername[username] = { ...publicRow, password_hash: passwordHash };
-    return { id: publicRow.id, username: publicRow.username, role: publicRow.role, status: publicRow.status };
+    return { ...publicRow };
+  });
+
+  adminModel.renewReseller.mockImplementation(async (id, expiresAt) => {
+    const row = resellersById[id];
+    if (!row) return null;
+    row.expires_at = expiresAt;
+    if (new Date(expiresAt) > new Date()) {
+      row.status = 'active';
+      row.expired_at = null;
+    }
+    if (adminsByUsername[row.username]) {
+      adminsByUsername[row.username].expires_at = row.expires_at;
+      adminsByUsername[row.username].status = row.status;
+      adminsByUsername[row.username].expired_at = row.expired_at;
+    }
+    return { ...row };
   });
 
   adminModel.updateResellerStatus.mockImplementation(async (id, status) => {
@@ -63,6 +87,13 @@ function wireMocks() {
     delete adminsByUsername[row.username];
     return true;
   });
+}
+
+function monthsFromNowCloseTo(date, months, toleranceDays = 1) {
+  const expected = new Date();
+  expected.setMonth(expected.getMonth() + months);
+  const diffMs = Math.abs(new Date(date).getTime() - expected.getTime());
+  return diffMs < toleranceDays * 24 * 60 * 60 * 1000;
 }
 
 describe('Admins (reseller management) flow', () => {
@@ -160,9 +191,33 @@ describe('Admins (reseller management) flow', () => {
     expect(res.body.status).toBe('active');
   });
 
+  test('10. renew with a custom future date resets status to active and clears expired_at', async () => {
+    const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const res = await adminAgent.patch(`/api/admins/${resellerId}/renew`).send({ expires_at: futureDate });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('active');
+    expect(res.body.expired_at).toBeNull();
+    expect(new Date(res.body.expires_at).toISOString()).toBe(futureDate);
+  });
+
+  test('11. renew with no body defaults expires_at to ~6 months out', async () => {
+    const res = await adminAgent.patch(`/api/admins/${resellerId}/renew`).send({});
+
+    expect(res.status).toBe(200);
+    expect(monthsFromNowCloseTo(res.body.expires_at, 6)).toBe(true);
+  });
+
+  test('12. renewing a non-existent reseller returns 404', async () => {
+    const res = await adminAgent.patch('/api/admins/999999/renew').send({});
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Reseller not found' });
+  });
+
   let resellerAgent;
 
-  test('10. login as that reseller with the NEW password succeeds', async () => {
+  test('13. login as that reseller with the NEW password succeeds', async () => {
     resellerAgent = request.agent(app);
 
     const res = await resellerAgent
@@ -173,35 +228,35 @@ describe('Admins (reseller management) flow', () => {
     expect(res.body.role).toBe('reseller');
   });
 
-  test('11. as the reseller, GET /api/admins is forbidden', async () => {
+  test('14. as the reseller, GET /api/admins is forbidden', async () => {
     const res = await resellerAgent.get('/api/admins');
 
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: 'Admin access required' });
   });
 
-  test('12. as the reseller, DELETE /api/admins/:id is forbidden', async () => {
+  test('15. as the reseller, DELETE /api/admins/:id is forbidden', async () => {
     const res = await resellerAgent.delete(`/api/admins/${resellerId}`);
 
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: 'Admin access required' });
   });
 
-  test('13. deleting a non-existent reseller returns 404', async () => {
+  test('16. deleting a non-existent reseller returns 404', async () => {
     const res = await adminAgent.delete('/api/admins/999999');
 
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: 'Reseller not found' });
   });
 
-  test('14. as admin, delete the reseller', async () => {
+  test('17. as admin, delete the reseller', async () => {
     const res = await adminAgent.delete(`/api/admins/${resellerId}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: 'Reseller deleted successfully' });
   });
 
-  test('15. the deleted reseller no longer appears', async () => {
+  test('18. the deleted reseller no longer appears', async () => {
     const res = await adminAgent.get(`/api/admins/${resellerId}`);
 
     expect(res.status).toBe(404);

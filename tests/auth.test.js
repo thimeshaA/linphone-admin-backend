@@ -74,6 +74,41 @@ describe('Auth flow', () => {
     expect(res.body).toEqual({ error: 'Account is disabled' });
   });
 
+  test('5b. login as a reseller whose expires_at has passed fails with 403 and flips status to expired', async () => {
+    const pastDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    adminModel.findAdminByUsername.mockResolvedValue({
+      ...TEST_ADMIN,
+      role: 'reseller',
+      status: 'active',
+      expires_at: pastDate,
+    });
+
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ username: TEST_ADMIN.username, password: TEST_ADMIN_PASSWORD });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: 'Account has expired' });
+    expect(adminModel.markResellerExpired).toHaveBeenCalledWith(TEST_ADMIN.id);
+  });
+
+  test('5c. login as a reseller with a future expires_at succeeds normally', async () => {
+    const futureDate = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    adminModel.findAdminByUsername.mockResolvedValue({
+      ...TEST_ADMIN,
+      role: 'reseller',
+      status: 'active',
+      expires_at: futureDate,
+    });
+
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ username: TEST_ADMIN.username, password: TEST_ADMIN_PASSWORD });
+
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe('reseller');
+  });
+
   test('6. logout succeeds and clears the cookie', async () => {
     const res = await agent.post('/api/auth/logout');
 

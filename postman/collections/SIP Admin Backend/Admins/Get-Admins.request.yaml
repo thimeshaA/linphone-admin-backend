@@ -7,7 +7,7 @@ params:
   - key: status
     value: ''
     disabled: true
-    description: 'Filter by admin status (active or disabled)'
+    description: 'Filter by admin status (active, disabled, or expired)'
 description: |-
   ## Purpose
   Lists all reseller accounts from `auth_admins`. Only returns rows with `role: reseller` — the primary admin account is never included in this list.
@@ -23,10 +23,10 @@ description: |-
   ## Request Requirements
   - No body or URL params required.
   - **Optional query param:**
-    - `?status=` — filter by reseller status (`active` or `disabled`).
+    - `?status=` — filter by reseller status (`active`, `disabled`, or `expired`).
 
   ## Responses
-  - **200 OK** — array of reseller objects. `password_hash` is never included.
+  - **200 OK** — array of reseller objects, including `expires_at`/`expired_at`. `password_hash` is never included.
   - **403 Forbidden** — caller is a reseller.
   - **401 Unauthorized** — missing or invalid auth token.
 

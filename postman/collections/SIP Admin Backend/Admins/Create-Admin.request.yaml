@@ -11,7 +11,8 @@ body:
   content: |-
     {
       "username": "newadmin",
-      "password": "securepassword"
+      "password": "securepassword",
+      "expires_at": null
     }
 description: |-
   ## Purpose
@@ -29,6 +30,8 @@ description: |-
   - **Required body fields:**
     - `username` (string) — unique login username for the reseller, e.g. `"newreseller"`.
     - `password` (string) — plaintext password; hashed server-side with bcrypt.
+  - **Optional body field:**
+    - `expires_at` (ISO date string) — initial expiry date for the reseller's access. Defaults to +6 months from now if omitted or `null`.
   - No `role` field is accepted — it is always set to `reseller` server-side.
 
   ## Responses

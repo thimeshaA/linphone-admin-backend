@@ -7,9 +7,16 @@ const {
   updateResellerStatus,
   updateResellerPassword,
   deleteReseller,
+  renewReseller,
 } = require('../models/adminModel');
 
 const SALT_ROUNDS = 10;
+
+function defaultExpiresAt() {
+  const date = new Date();
+  date.setMonth(date.getMonth() + 6);
+  return date;
+}
 
 async function list(req, res) {
   const { status } = req.query;
@@ -33,7 +40,7 @@ async function getOne(req, res) {
 }
 
 async function create(req, res) {
-  const { username, password } = req.body;
+  const { username, password, expires_at } = req.body;
 
   if (!username || !password) {
     return res.status(400).json({ error: 'username and password are required' });
@@ -45,9 +52,25 @@ async function create(req, res) {
   }
 
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-  const reseller = await createReseller({ username, passwordHash });
+  const reseller = await createReseller({
+    username,
+    passwordHash,
+    expiresAt: expires_at || defaultExpiresAt(),
+  });
 
   return res.status(201).json(reseller);
+}
+
+async function renew(req, res) {
+  const { expires_at } = req.body;
+  const expiresAt = expires_at || defaultExpiresAt();
+
+  const reseller = await renewReseller(req.params.id, expiresAt);
+  if (!reseller) {
+    return res.status(404).json({ error: 'Reseller not found' });
+  }
+
+  return res.json(reseller);
 }
 
 async function updateStatus(req, res) {
@@ -92,4 +115,4 @@ async function remove(req, res) {
   return res.json({ message: 'Reseller deleted successfully' });
 }
 
-module.exports = { list, getOne, create, updateStatus, resetPassword, remove };
+module.exports = { list, getOne, create, updateStatus, resetPassword, remove, renew };

@@ -1,6 +1,11 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { findAdminByUsername, findAdminById, updatePasswordById } = require('../models/adminModel');
+const {
+  findAdminByUsername,
+  findAdminById,
+  updatePasswordById,
+  markResellerExpired,
+} = require('../models/adminModel');
 
 const COOKIE_NAME = 'token';
 const TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -31,6 +36,13 @@ async function login(req, res) {
 
   if (admin.status === 'disabled') {
     return res.status(403).json({ error: 'Account is disabled' });
+  }
+
+  if (admin.role === 'reseller' && admin.expires_at && new Date(admin.expires_at) <= new Date()) {
+    if (admin.status === 'active') {
+      await markResellerExpired(admin.id);
+    }
+    return res.status(403).json({ error: 'Account has expired' });
   }
 
   const token = jwt.sign(
