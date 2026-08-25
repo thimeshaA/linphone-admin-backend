@@ -10,6 +10,8 @@ const {
   deleteAccount,
 } = require('../models/accountModel');
 const { getAdminStatusById, findAdminUsernamesByIds } = require('../models/adminModel');
+const { sendMail } = require('../utils/mailer');
+const { isValidEmail } = require('../utils/validators');
 
 function hashPassword(authid, domain, password) {
   return crypto.createHash('md5').update(`${authid}:${domain}:${password}`).digest('hex');
@@ -47,10 +49,14 @@ async function getOne(req, res) {
 }
 
 async function create(req, res) {
-  const { authid, domain, password, status, expires_at, creator_id } = req.body;
+  const { authid, domain, password, status, expires_at, creator_id, email } = req.body;
 
   if (!authid || !domain || !password) {
     return res.status(400).json({ error: 'authid, domain and password are required' });
+  }
+
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'a valid email is required' });
   }
 
   const creator = await getAdminStatusById(creator_id);
@@ -73,7 +79,19 @@ async function create(req, res) {
     status: status || 'active',
     expiresAt: expires_at || defaultExpiresAt(),
     creatorId: creator_id,
+    email,
   });
+
+  try {
+    await sendMail({
+      to: email,
+      subject: 'Your SIP account credentials',
+      text: `Your SIP account has been created.\n\nUsername: ${authid}\nPassword: ${password}\n\nLog in at: ${process.env.ADMIN_PANEL_URL}`,
+      html: `<p>Your SIP account has been created.</p><p><strong>Username:</strong> ${authid}<br><strong>Password:</strong> ${password}</p><p>Log in at <a href="${process.env.ADMIN_PANEL_URL}">${process.env.ADMIN_PANEL_URL}</a></p>`,
+    });
+  } catch (err) {
+    console.error('Failed to send account credentials email:', err);
+  }
 
   return res.status(201).json(account);
 }

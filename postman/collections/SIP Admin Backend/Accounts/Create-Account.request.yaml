@@ -13,13 +13,14 @@ body:
       "authid": "testuser",
       "domain": "sip.example.com",
       "password": "securepassword",
+      "email": "customer@example.com",
       "status": "active",
       "expires_at": null,
       "creator_id": 1
     }
 description: |-
   ## Purpose
-  Creates a new SIP account in `auth_users`. The password is hashed server-side using the SIP digest format required by Flexisip.
+  Creates a new SIP account in `auth_users`. The password is hashed server-side using the SIP digest format required by Flexisip. On success, a credentials email is sent to the supplied `email` address.
 
   ## Use Case
   Called when a reseller provisions a new SIP account for one of their customers, or when an admin creates an account on behalf of any reseller.
@@ -36,15 +37,18 @@ description: |-
     - `authid` (string) — SIP username, e.g. `"alice"`.
     - `domain` (string) — SIP domain, e.g. `"sip.example.com"`.
     - `password` (string) — plaintext password; hashed server-side as `MD5(authid:domain:password)`.
+    - `email` (string) — valid contact email; stored on the account and used to send the credentials email below.
   - **Optional body fields:**
     - `expires_at` (ISO date string) — account expiry date; defaults to +6 months from now if omitted.
     - `creator_id` (integer) — admin-only; ignored for resellers.
 
   ## Responses
   - **201 Created** — account created successfully.
-  - **400 Bad Request** — `creator_id` does not exist in `auth_admins`, or the referenced reseller is disabled.
+  - **400 Bad Request** — missing/invalid `email`, `creator_id` does not exist in `auth_admins`, or the referenced reseller is disabled.
   - **409 Conflict** — an account with the same `(authid, domain)` pair already exists.
   - **401 Unauthorized** — missing or invalid auth token.
 
   ## Notes
   The password hashing scheme is `MD5(authid:domain:password)` — this is Flexisip's required SIP digest format and is intentionally different from the bcrypt scheme used for admin/reseller login passwords. The plaintext password is never stored.
+
+  After the account row is created, the backend emails `authid` and the **plaintext** password (captured before hashing) plus the `ADMIN_PANEL_URL` login link to `email`. If that email fails to send, account creation still succeeds (the DB write is not rolled back) — the failure is only logged server-side, not surfaced in the response. Sending a plaintext password by email is a known-imperfect pattern; a one-time setup-link flow is a possible future improvement.

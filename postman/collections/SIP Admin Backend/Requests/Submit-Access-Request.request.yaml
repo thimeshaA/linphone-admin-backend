@@ -1,0 +1,50 @@
+$kind: http-request
+name: Submit Access Request
+method: POST
+url: '{{baseUrl}}/api/requests'
+order: 1000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "kind": "reseller",
+      "module": "sip",
+      "name": "Jane Reseller",
+      "email": "jane@example.com",
+      "phone": "+94770000000",
+      "company": "Jane Co",
+      "country": "Sri Lanka",
+      "website": "https://example.com",
+      "reason": "We resell SIP trunks to local businesses across the region.",
+      "note": "Referred by an existing partner."
+    }
+description: |-
+  ## Purpose
+  Public intake endpoint for the "request access" form — lets a prospective reseller or end-user submit their details for the operations team to review, with no sign-in and no account created automatically.
+
+  ## Use Case
+  Called by the public marketing/sign-in page's "Request access" form. The operations team receives the submission by email and decides manually whether to onboard the requester (there is currently no in-app approval queue or persisted record — see Notes).
+
+  ## Authentication
+  - **None** — this endpoint is fully public, no `verifyToken` cookie required.
+
+  ## Request Requirements
+  - **Required body fields:**
+    - `kind` (string) — `"reseller"` or `"account"`.
+    - `module` (string) — `"sip"` or `"esim"`.
+    - `name` (string) — contact's full name.
+    - `email` (string) — valid email address to reply to.
+    - `phone` (string) — contact phone number.
+  - **Optional body fields:** `company`, `country`, `website`, `reason`, `note` — included in the email body verbatim when present. The frontend currently requires `company`/`country`/`reason` when `kind` is `"reseller"`, but this endpoint does not enforce that — it only enforces the `kind`/`module` rule below.
+  - **Business rule:** `kind: "account"` is only allowed when `module: "esim"`. Requesting a SIP account through this form is rejected — SIP accounts are always reseller-provisioned, never self-requested.
+
+  ## Responses
+  - **201 Created** — `{ "message": "Request submitted successfully" }`. Only returned once the email has actually been sent.
+  - **400 Bad Request** — invalid/missing `kind`, `module`, `name`, `email`, or `phone`; or `kind: "account"` combined with `module: "sip"`.
+  - **502 Bad Gateway** — the request was well-formed but the email failed to send (SMTP error). Since nothing is persisted anywhere, a failed send means the request is entirely lost — the caller should show an error and let the user retry, not treat this as success.
+
+  ## Notes
+  There is **no database write** of any kind for this endpoint — no `requests` table exists in either schema. The outbound email to `enigma-admin@prometeolk.com` is the only record of the submission. If that email is lost (deleted, spam-filtered, etc.), the request is gone with no way to recover it — this is a deliberate simplification of a previously-built-then-removed request/approval feature, not an oversight.

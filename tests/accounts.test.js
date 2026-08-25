@@ -3,9 +3,11 @@ const { TEST_ADMIN_PASSWORD, TEST_ADMIN } = require('./helpers/fixtures');
 
 jest.mock('../models/adminModel');
 jest.mock('../models/accountModel');
+jest.mock('../utils/mailer');
 
 const adminModel = require('../models/adminModel');
 const accountModel = require('../models/accountModel');
+const mailer = require('../utils/mailer');
 const app = require('../index');
 
 // buildScopedWhereClause is a pure function with no DB access, so it's tested
@@ -55,13 +57,13 @@ function wireMocks() {
     }
     return map;
   });
-  adminModel.createReseller.mockImplementation(async ({ username, passwordHash }) => {
+  adminModel.createReseller.mockImplementation(async ({ username, passwordHash, email }) => {
     const id = nextAdminId++;
-    const publicRow = { id, username, role: 'reseller', status: 'active', created_at: new Date() };
+    const publicRow = { id, username, role: 'reseller', status: 'active', email, created_at: new Date() };
     resellersById[id] = publicRow;
     adminStatusById[id] = { id, status: 'active' };
     adminsByUsername[username] = { ...publicRow, password_hash: passwordHash };
-    return { id: publicRow.id, username: publicRow.username, role: publicRow.role, status: publicRow.status };
+    return { ...publicRow };
   });
 
   function scopedRow(id, scopeFilter) {
@@ -78,7 +80,7 @@ function wireMocks() {
     return row ? { id: row.id } : null;
   });
 
-  accountModel.createAccount.mockImplementation(async ({ authid, domain, status, expiresAt, creatorId }) => {
+  accountModel.createAccount.mockImplementation(async ({ authid, domain, status, expiresAt, creatorId, email }) => {
     const id = nextAccountId++;
     const row = {
       id,
@@ -90,6 +92,7 @@ function wireMocks() {
       disabled_at: null,
       expired_at: null,
       creator_id: creatorId,
+      email,
     };
     accountsById[id] = row;
     return { ...row };
@@ -167,6 +170,7 @@ describe('Accounts flow (admin + reseller)', () => {
   beforeAll(() => {
     seedStore();
     wireMocks();
+    mailer.sendMail.mockResolvedValue(undefined);
   });
 
   test('1. login as admin (agent A)', async () => {
@@ -181,11 +185,12 @@ describe('Accounts flow (admin + reseller)', () => {
   test('2. create a throwaway reseller to own the test accounts', async () => {
     const res = await adminAgent
       .post('/api/admins')
-      .send({ username: resellerUsername, password: resellerPassword });
+      .send({ username: resellerUsername, password: resellerPassword, email: 'reseller@example.com' });
 
     expect(res.status).toBe(201);
     expect(res.body.role).toBe('reseller');
     resellerId = res.body.id;
+    expect(mailer.sendMail).toHaveBeenCalledTimes(1);
   });
 
   test('3. as admin: create an account assigned to the reseller creator_id', async () => {
@@ -194,11 +199,13 @@ describe('Accounts flow (admin + reseller)', () => {
       domain: accountDomain,
       password: 'AccountPass123!',
       creator_id: resellerId,
+      email: 'enduser@example.com',
     });
 
     expect(res.status).toBe(201);
     expect(res.body.creator_id).toBe(resellerId);
     accountId = res.body.id;
+    expect(mailer.sendMail).toHaveBeenCalledTimes(2);
   });
 
   test('3b. as admin: create a second throwaway account owned by a different creator', async () => {
@@ -207,11 +214,13 @@ describe('Accounts flow (admin + reseller)', () => {
       domain: accountDomain,
       password: 'AccountPass123!',
       creator_id: TEST_ADMIN.id,
+      email: 'otherenduser@example.com',
     });
 
     expect(res.status).toBe(201);
     expect(res.body.creator_id).toBe(TEST_ADMIN.id);
     otherAccountId = res.body.id;
+    expect(mailer.sendMail).toHaveBeenCalledTimes(3);
   });
 
   test('4. as admin: list accounts, confirm created_by is present and correct', async () => {

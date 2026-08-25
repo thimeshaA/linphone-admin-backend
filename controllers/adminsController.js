@@ -9,6 +9,8 @@ const {
   deleteReseller,
   renewReseller,
 } = require('../models/adminModel');
+const { sendMail } = require('../utils/mailer');
+const { isValidEmail } = require('../utils/validators');
 
 const SALT_ROUNDS = 10;
 
@@ -40,10 +42,14 @@ async function getOne(req, res) {
 }
 
 async function create(req, res) {
-  const { username, password, expires_at } = req.body;
+  const { username, password, expires_at, email } = req.body;
 
   if (!username || !password) {
     return res.status(400).json({ error: 'username and password are required' });
+  }
+
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'a valid email is required' });
   }
 
   const existing = await findAdminByUsername(username);
@@ -56,7 +62,19 @@ async function create(req, res) {
     username,
     passwordHash,
     expiresAt: expires_at || defaultExpiresAt(),
+    email,
   });
+
+  try {
+    await sendMail({
+      to: email,
+      subject: 'Your reseller account credentials',
+      text: `Your reseller account has been created.\n\nUsername: ${username}\nPassword: ${password}\n\nLog in at: ${process.env.ADMIN_PANEL_URL}`,
+      html: `<p>Your reseller account has been created.</p><p><strong>Username:</strong> ${username}<br><strong>Password:</strong> ${password}</p><p>Log in at <a href="${process.env.ADMIN_PANEL_URL}">${process.env.ADMIN_PANEL_URL}</a></p>`,
+    });
+  } catch (err) {
+    console.error('Failed to send reseller credentials email:', err);
+  }
 
   return res.status(201).json(reseller);
 }

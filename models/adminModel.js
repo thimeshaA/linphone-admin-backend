@@ -2,7 +2,7 @@ const { adminPool } = require('../config/db');
 
 async function findAdminByUsername(username) {
   const [rows] = await adminPool.query(
-    'SELECT id, username, password_hash, role, status, expires_at, expired_at, created_at FROM admins WHERE username = ? LIMIT 1',
+    'SELECT id, username, password_hash, role, status, expires_at, expired_at, email, created_at FROM admins WHERE username = ? LIMIT 1',
     [username]
   );
   return rows[0] || null;
@@ -32,7 +32,7 @@ async function findAdminUsernamesByIds(ids) {
 
 async function findAdminById(id) {
   const [rows] = await adminPool.query(
-    'SELECT id, username, password_hash, role, status, expires_at, expired_at, created_at FROM admins WHERE id = ? LIMIT 1',
+    'SELECT id, username, password_hash, role, status, expires_at, expired_at, email, created_at FROM admins WHERE id = ? LIMIT 1',
     [id]
   );
   return rows[0] || null;
@@ -48,7 +48,7 @@ async function updatePasswordById(id, passwordHash) {
 
 async function listResellers(status) {
   let query =
-    "SELECT id, username, role, status, expires_at, expired_at, created_at FROM admins WHERE role = 'reseller'";
+    "SELECT id, username, role, status, expires_at, expired_at, email, created_at FROM admins WHERE role = 'reseller'";
   const params = [];
 
   if (status) {
@@ -64,18 +64,26 @@ async function listResellers(status) {
 
 async function getResellerById(id) {
   const [rows] = await adminPool.query(
-    "SELECT id, username, role, status, expires_at, expired_at, created_at FROM admins WHERE id = ? AND role = 'reseller' LIMIT 1",
+    "SELECT id, username, role, status, expires_at, expired_at, email, created_at FROM admins WHERE id = ? AND role = 'reseller' LIMIT 1",
     [id]
   );
   return rows[0] || null;
 }
 
-async function createReseller({ username, passwordHash, expiresAt }) {
+async function createReseller({ username, passwordHash, expiresAt, email }) {
   const [result] = await adminPool.query(
-    "INSERT INTO admins (username, password_hash, role, status, expires_at) VALUES (?, ?, 'reseller', 'active', ?)",
-    [username, passwordHash, expiresAt]
+    "INSERT INTO admins (username, password_hash, role, status, expires_at, email) VALUES (?, ?, 'reseller', 'active', ?, ?)",
+    [username, passwordHash, expiresAt, email]
   );
-  return { id: result.insertId, username, role: 'reseller', status: 'active', expires_at: expiresAt, expired_at: null };
+  return {
+    id: result.insertId,
+    username,
+    role: 'reseller',
+    status: 'active',
+    expires_at: expiresAt,
+    expired_at: null,
+    email,
+  };
 }
 
 async function renewReseller(id, expiresAt) {

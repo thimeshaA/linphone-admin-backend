@@ -3,8 +3,10 @@ const bcrypt = require('bcrypt');
 const { TEST_ADMIN_PASSWORD, TEST_ADMIN } = require('./helpers/fixtures');
 
 jest.mock('../models/adminModel');
+jest.mock('../utils/mailer');
 
 const adminModel = require('../models/adminModel');
+const mailer = require('../utils/mailer');
 const app = require('../index');
 
 // In-memory fake "admins" table backing every mocked adminModel function, so
@@ -33,7 +35,7 @@ function wireMocks() {
     return row ? { ...row } : null;
   });
 
-  adminModel.createReseller.mockImplementation(async ({ username, passwordHash, expiresAt }) => {
+  adminModel.createReseller.mockImplementation(async ({ username, passwordHash, expiresAt, email }) => {
     const id = nextId++;
     const publicRow = {
       id,
@@ -42,6 +44,7 @@ function wireMocks() {
       status: 'active',
       expires_at: expiresAt,
       expired_at: null,
+      email,
       created_at: new Date(),
     };
     resellersById[id] = publicRow;
@@ -106,6 +109,7 @@ describe('Admins (reseller management) flow', () => {
   beforeAll(() => {
     seedStore();
     wireMocks();
+    mailer.sendMail.mockResolvedValue(undefined);
   });
 
   test('1. login as admin (agent persists cookie for the rest of the file)', async () => {
@@ -120,12 +124,16 @@ describe('Admins (reseller management) flow', () => {
   test('2. create a reseller; role is forced to "reseller" even though "admin" was sent', async () => {
     const res = await adminAgent
       .post('/api/admins')
-      .send({ username: resellerUsername, password: resellerPassword, role: 'admin' });
+      .send({ username: resellerUsername, password: resellerPassword, email: 'reseller@example.com', role: 'admin' });
 
     expect(res.status).toBe(201);
     expect(res.body.username).toBe(resellerUsername);
     expect(res.body.role).toBe('reseller');
     expect(res.body).not.toHaveProperty('password_hash');
+    expect(mailer.sendMail).toHaveBeenCalledTimes(1);
+    expect(mailer.sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'reseller@example.com', subject: expect.stringContaining('reseller') })
+    );
 
     resellerId = res.body.id;
     expect(resellerId).toBeDefined();
@@ -134,7 +142,7 @@ describe('Admins (reseller management) flow', () => {
   test('3. creating the same username again is rejected with 409', async () => {
     const res = await adminAgent
       .post('/api/admins')
-      .send({ username: resellerUsername, password: 'SomeOtherPass1!' });
+      .send({ username: resellerUsername, password: 'SomeOtherPass1!', email: 'reseller2@example.com' });
 
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: 'Username already exists' });

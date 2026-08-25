@@ -1,6 +1,7 @@
 const { flexisipPool } = require('../config/db');
 
-const PUBLIC_COLUMNS = 'id, authid, domain, created_at, status, expires_at, disabled_at, expired_at, creator_id';
+const PUBLIC_COLUMNS =
+  'id, authid, domain, created_at, status, expires_at, disabled_at, expired_at, creator_id, email';
 
 function buildScopedWhereClause(scopeFilter) {
   if (scopeFilter && scopeFilter.creator_id !== undefined) {
@@ -48,10 +49,10 @@ async function findAccountByAuthidDomain(authid, domain) {
   return rows[0] || null;
 }
 
-async function createAccount({ authid, domain, passwordHash, status, expiresAt, creatorId }) {
+async function createAccount({ authid, domain, passwordHash, status, expiresAt, creatorId, email }) {
   const [result] = await flexisipPool.query(
-    'INSERT INTO auth_users (authid, domain, password, status, expires_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)',
-    [authid, domain, passwordHash, status, expiresAt, creatorId]
+    'INSERT INTO auth_users (authid, domain, password, status, expires_at, creator_id, email) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [authid, domain, passwordHash, status, expiresAt, creatorId, email]
   );
 
   const [rows] = await flexisipPool.query(`SELECT ${PUBLIC_COLUMNS} FROM auth_users WHERE id = ?`, [
