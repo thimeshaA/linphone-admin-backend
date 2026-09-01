@@ -29,7 +29,9 @@ function escapeHtml(value) {
 }
 
 function moduleColor(module) {
-  return module === 'sip' ? BRAND.sip : BRAND.esim;
+  if (module === 'sip') return BRAND.sip;
+  if (module === 'esim') return BRAND.esim;
+  return BRAND.accent;
 }
 
 function formatSubmittedAt(iso) {
@@ -147,6 +149,21 @@ function kindLabel(kind) {
   return kind === 'reseller' ? 'Reseller application' : 'Account request';
 }
 
+function resetButtonRow(url) {
+  return `
+    <tr>
+      <td style="padding:8px 0 4px 0;">
+        <table role="presentation" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="border-radius:8px;background:${BRAND.ink};">
+              <a href="${url}" style="display:inline-block;padding:12px 24px;font:700 14px ${FONT};color:#ffffff;text-decoration:none;border-radius:8px;">Reset password</a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>`;
+}
+
 function renderOperationsNotificationHtml(fields, submittedAt) {
   return renderEmailShell({
     module: fields.module,
@@ -177,4 +194,24 @@ function renderVisitorConfirmationHtml(fields, submittedAt) {
   });
 }
 
-module.exports = { renderOperationsNotificationHtml, renderVisitorConfirmationHtml };
+function renderPasswordResetHtml({ username, resetUrl, expiresInMinutes }) {
+  return renderEmailShell({
+    module: undefined,
+    preheader: 'Reset your Admin Control password',
+    eyebrow: 'Password reset',
+    title: 'Reset your password',
+    intro: [
+      `Hi ${escapeHtml(username)},`,
+      `We received a request to reset your Admin Control password. Click the button below to choose a new one. This link expires in ${expiresInMinutes} minutes.`,
+      "If you didn't request this, you can safely ignore this email — your password won't change.",
+    ],
+    rowsHtml: resetButtonRow(escapeHtml(resetUrl)),
+    footerNote: 'For your security, this link can only be used once.',
+  });
+}
+
+module.exports = {
+  renderOperationsNotificationHtml,
+  renderVisitorConfirmationHtml,
+  renderPasswordResetHtml,
+};
