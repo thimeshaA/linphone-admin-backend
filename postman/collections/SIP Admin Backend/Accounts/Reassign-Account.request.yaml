@@ -1,0 +1,40 @@
+$kind: http-request
+name: Reassign Account
+method: PATCH
+url: '{{baseUrl}}/api/accounts/{{accountId}}/reassign'
+order: 1006
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "resellerId": 1
+    }
+description: |-
+  ## Purpose
+  Changes which reseller owns an existing SIP account by updating `creator_id` on the `auth_users` row.
+
+  ## Use Case
+  Called by an admin when an account needs to move to a different reseller — for example, a customer relationship transfers from one reseller to another. `creator_id` was previously write-once (set only at account creation); this endpoint makes it mutable.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admin-only** — resellers always receive **403 Forbidden**, regardless of whether they own the account.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` — the numeric id of the SIP account to reassign.
+  - **Required body field:**
+    - `resellerId` (integer) — the id of the `admins` row that will take ownership. Must reference an existing row with `role = 'reseller'`; validated identically to Create Account.
+
+  ## Responses
+  - **200 OK** — account reassigned; the full updated account object is returned, with `creator_id` reflecting the new owner.
+  - **400 Bad Request** — `resellerId` missing, does not reference an existing reseller, or references a disabled reseller (`{ "error": "..." }`).
+  - **403 Forbidden** — caller is a reseller; reassignment is admin-only.
+  - **404 Not Found** — account does not exist.
+  - **401 Unauthorized** — missing or invalid auth token.
+
+  ## Notes
+  Nothing else in the backend currently assumes `creator_id` is immutable once set — there is no audit log table, and no reporting query keys off a stable creator_id over time. The frontend's `AuditAction` union does not yet include a reassignment event; adding one (e.g. `account.reassigned`) is a proposal to confirm separately since that type is shared with the frontend.

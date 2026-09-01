@@ -194,6 +194,34 @@ function renderVisitorConfirmationHtml(fields, submittedAt) {
   });
 }
 
+function requestedAccountRow(index, entry) {
+  const contact = [entry.email, entry.phone].filter(Boolean).join(' / ');
+  const parts = [contact];
+  if (entry.note) parts.push(`Note: ${entry.note}`);
+  return detailRow(`#${index} ${entry.name}`, parts.join(' — '));
+}
+
+function renderBatchAccountRequestHtml({ resellerUsername, resellerEmail, requests }, submittedAt) {
+  const rowsHtml = [
+    detailRow('Reseller', resellerUsername),
+    detailRow('Reseller email', resellerEmail),
+    detailRow('Requested accounts', String(requests.length)),
+    ...requests.map((entry, i) => requestedAccountRow(i + 1, entry)),
+  ].join('');
+
+  return renderEmailShell({
+    module: 'sip',
+    preheader: `${resellerUsername} requested ${requests.length} SIP account${requests.length === 1 ? '' : 's'}`,
+    eyebrow: 'SIP account request',
+    title: 'New SIP account request',
+    intro: [
+      `Reseller <strong>${escapeHtml(resellerUsername)}</strong> requested ${requests.length} SIP account${requests.length === 1 ? '' : 's'} on ${escapeHtml(formatSubmittedAt(submittedAt))}.`,
+    ],
+    rowsHtml,
+    footerNote: 'Automated notification from the Admin Control reseller account-request flow.',
+  });
+}
+
 function renderPasswordResetHtml({ username, resetUrl, expiresInMinutes }) {
   return renderEmailShell({
     module: undefined,
@@ -213,5 +241,6 @@ function renderPasswordResetHtml({ username, resetUrl, expiresInMinutes }) {
 module.exports = {
   renderOperationsNotificationHtml,
   renderVisitorConfirmationHtml,
+  renderBatchAccountRequestHtml,
   renderPasswordResetHtml,
 };

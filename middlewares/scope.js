@@ -5,18 +5,16 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requireReseller(req, res, next) {
+  if (req.admin.role !== 'reseller') {
+    return res.status(403).json({ error: 'Reseller access required' });
+  }
+  next();
+}
+
 function applyOwnershipFilter(req, res, next) {
   req.scopeFilter = req.admin.role === 'admin' ? {} : { creator_id: req.admin.id };
   next();
 }
 
-function forceCreatorId(req, res, next) {
-  if (req.admin.role === 'reseller') {
-    req.body.creator_id = req.admin.id;
-  } else if (req.body.creator_id === undefined || req.body.creator_id === null) {
-    req.body.creator_id = req.admin.id;
-  }
-  next();
-}
-
-module.exports = { requireAdmin, applyOwnershipFilter, forceCreatorId };
+module.exports = { requireAdmin, requireReseller, applyOwnershipFilter };

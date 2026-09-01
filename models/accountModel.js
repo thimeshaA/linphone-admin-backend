@@ -80,6 +80,16 @@ async function renewAccount(id, scopeFilter, expiresAt) {
   return getAccountById(id, scopeFilter);
 }
 
+async function reassignAccountCreator(id, resellerId) {
+  const [result] = await flexisipPool.query('UPDATE auth_users SET creator_id = ? WHERE id = ?', [
+    resellerId,
+    id,
+  ]);
+
+  if (result.affectedRows === 0) return null;
+  return getAccountById(id, {});
+}
+
 async function disableAccount(id, scopeFilter) {
   const { condition, params } = buildScopedWhereClause(scopeFilter);
   const [result] = await flexisipPool.query(
@@ -112,6 +122,7 @@ module.exports = {
   getAccountById,
   findAccountByAuthid,
   createAccount,
+  reassignAccountCreator,
   renewAccount,
   disableAccount,
   updateAccountPassword,

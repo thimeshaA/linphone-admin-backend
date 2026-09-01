@@ -3,19 +3,24 @@ const {
   list,
   getOne,
   create,
+  reassign,
   renew,
   disable,
   updatePassword,
   remove,
+  requestAccounts,
 } = require('../controllers/accountsController');
 const { verifyToken } = require('../middlewares/auth');
-const { applyOwnershipFilter, forceCreatorId, requireAdmin } = require('../middlewares/scope');
+const { applyOwnershipFilter, requireAdmin, requireReseller } = require('../middlewares/scope');
 
 const router = express.Router();
 
+router.post('/request', verifyToken, requireReseller, requestAccounts);
+
 router.get('/', verifyToken, applyOwnershipFilter, list);
 router.get('/:id', verifyToken, applyOwnershipFilter, getOne);
-router.post('/', verifyToken, applyOwnershipFilter, forceCreatorId, create);
+router.post('/', verifyToken, requireAdmin, create);
+router.patch('/:id/reassign', verifyToken, requireAdmin, reassign);
 router.patch('/:id/renew', verifyToken, applyOwnershipFilter, renew);
 router.patch('/:id/disable', verifyToken, applyOwnershipFilter, disable);
 router.patch('/:id/password', verifyToken, applyOwnershipFilter, updatePassword);

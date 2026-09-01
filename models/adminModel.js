@@ -24,11 +24,6 @@ async function adminExistsById(id) {
   return rows.length > 0;
 }
 
-async function getAdminStatusById(id) {
-  const [rows] = await adminPool.query('SELECT id, status FROM admins WHERE id = ? LIMIT 1', [id]);
-  return rows[0] || null;
-}
-
 async function findAdminUsernamesByIds(ids) {
   if (!ids.length) return {};
   const [rows] = await adminPool.query(
@@ -160,7 +155,6 @@ module.exports = {
   findAdminByUsername,
   findAdminByEmail,
   adminExistsById,
-  getAdminStatusById,
   findAdminUsernamesByIds,
   findAdminById,
   updatePasswordById,

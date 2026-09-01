@@ -30,7 +30,6 @@ describe('buildScopedWhereClause (pure function)', () => {
 // In-memory fake tables backing every mocked model function, so the
 // sequential steps below observe consistent state without a real DB.
 let adminsByUsername;
-let adminStatusById;
 let resellersById;
 let accountsById;
 let nextAdminId;
@@ -38,7 +37,6 @@ let nextAccountId;
 
 function seedStore() {
   adminsByUsername = { [TEST_ADMIN.username]: TEST_ADMIN };
-  adminStatusById = { [TEST_ADMIN.id]: { id: TEST_ADMIN.id, status: 'active' } };
   resellersById = {};
   accountsById = {};
   nextAdminId = 100;
@@ -47,7 +45,11 @@ function seedStore() {
 
 function wireMocks() {
   adminModel.findAdminByUsername.mockImplementation(async (username) => adminsByUsername[username] || null);
-  adminModel.getAdminStatusById.mockImplementation(async (id) => adminStatusById[id] || null);
+  adminModel.getResellerById.mockImplementation(async (id) => resellersById[id] || null);
+  adminModel.findAdminById.mockImplementation(async (id) => {
+    const allAdmins = Object.values(adminsByUsername);
+    return allAdmins.find((a) => a.id === id) || null;
+  });
   adminModel.findAdminUsernamesByIds.mockImplementation(async (ids) => {
     const allAdmins = Object.values(adminsByUsername);
     const map = {};
@@ -61,7 +63,6 @@ function wireMocks() {
     const id = nextAdminId++;
     const publicRow = { id, username, role: 'reseller', status: 'active', email, created_at: new Date() };
     resellersById[id] = publicRow;
-    adminStatusById[id] = { id, status: 'active' };
     adminsByUsername[username] = { ...publicRow, password_hash: passwordHash };
     return { ...publicRow };
   });
@@ -115,6 +116,13 @@ function wireMocks() {
     return row ? { ...row } : null;
   });
 
+  accountModel.reassignAccountCreator.mockImplementation(async (id, resellerId) => {
+    const row = accountsById[Number(id)];
+    if (!row) return null;
+    row.creator_id = resellerId;
+    return { ...row };
+  });
+
   accountModel.renewAccount.mockImplementation(async (id, scopeFilter, expiresAt) => {
     const row = scopedRow(Number(id), scopeFilter);
     if (!row) return null;
@@ -161,11 +169,15 @@ describe('Accounts flow (admin + reseller)', () => {
   const resellerPassword = 'ResellerPass123!';
   let resellerId;
 
+  const reseller2Username = `testreseller2_${Date.now()}`;
+  let reseller2Id;
+
   let accountId;
   const accountAuthid = `testuser_${Date.now()}`;
   const accountDomain = 'test.example.com';
 
   let otherAccountId;
+  let reassignAccountId;
 
   beforeAll(() => {
     seedStore();
@@ -193,19 +205,29 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(mailer.sendMail).toHaveBeenCalledTimes(1);
   });
 
-  test('3. as admin: create an account assigned to the reseller creator_id', async () => {
+  test('2b. create a second throwaway reseller for ownership/reassignment tests', async () => {
+    const res = await adminAgent
+      .post('/api/admins')
+      .send({ username: reseller2Username, password: 'ResellerPass456!', email: 'reseller2@example.com' });
+
+    expect(res.status).toBe(201);
+    reseller2Id = res.body.id;
+    expect(mailer.sendMail).toHaveBeenCalledTimes(2);
+  });
+
+  test('3. as admin: create an account assigned via resellerId', async () => {
     const res = await adminAgent.post('/api/accounts').send({
       authid: accountAuthid,
       domain: accountDomain,
       password: 'AccountPass123!',
-      creator_id: resellerId,
+      resellerId,
       email: 'enduser@example.com',
     });
 
     expect(res.status).toBe(201);
     expect(res.body.creator_id).toBe(resellerId);
     accountId = res.body.id;
-    expect(mailer.sendMail).toHaveBeenCalledTimes(2);
+    expect(mailer.sendMail).toHaveBeenCalledTimes(3);
   });
 
   test('3a. an email-shaped authid is rejected with a field-specific 400', async () => {
@@ -213,7 +235,7 @@ describe('Accounts flow (admin + reseller)', () => {
       authid: 'not an authid@example.com',
       domain: accountDomain,
       password: 'AccountPass123!',
-      creator_id: resellerId,
+      resellerId,
       email: 'valid@example.com',
     });
 
@@ -227,7 +249,7 @@ describe('Accounts flow (admin + reseller)', () => {
       authid: `testuser_${Date.now()}_bad_email`,
       domain: accountDomain,
       password: 'AccountPass123!',
-      creator_id: resellerId,
+      resellerId,
       email: 'not-an-email',
     });
 
@@ -241,7 +263,7 @@ describe('Accounts flow (admin + reseller)', () => {
       authid: accountAuthid,
       domain: 'a-completely-different-domain.example.com',
       password: 'AccountPass123!',
-      creator_id: resellerId,
+      resellerId,
       email: 'someoneelse@example.com',
     });
 
@@ -249,19 +271,59 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body).toEqual({ error: 'An account with this authid already exists' });
   });
 
-  test('3b. as admin: create a second throwaway account owned by a different creator', async () => {
+  test('3d. resellerId referencing a non-reseller admin is rejected with 400', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: `testuser_${Date.now()}_bad_owner`,
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      resellerId: TEST_ADMIN.id,
+      email: 'someoneelse2@example.com',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'resellerId does not reference an existing reseller' });
+  });
+
+  test('3e. missing resellerId is rejected with 400', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: `testuser_${Date.now()}_no_owner`,
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      email: 'someoneelse3@example.com',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'resellerId is required' });
+  });
+
+  test('3b. as admin: create a second throwaway account owned by the second reseller', async () => {
     const res = await adminAgent.post('/api/accounts').send({
       authid: `otheruser_${Date.now()}`,
       domain: accountDomain,
       password: 'AccountPass123!',
-      creator_id: TEST_ADMIN.id,
+      resellerId: reseller2Id,
       email: 'otherenduser@example.com',
     });
 
     expect(res.status).toBe(201);
-    expect(res.body.creator_id).toBe(TEST_ADMIN.id);
+    expect(res.body.creator_id).toBe(reseller2Id);
     otherAccountId = res.body.id;
-    expect(mailer.sendMail).toHaveBeenCalledTimes(3);
+    expect(mailer.sendMail).toHaveBeenCalledTimes(4);
+  });
+
+  test('3f. as admin: create a third throwaway account, owned by the first reseller, for reassignment tests', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: `reassignuser_${Date.now()}`,
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      resellerId,
+      email: 'reassignenduser@example.com',
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.creator_id).toBe(resellerId);
+    reassignAccountId = res.body.id;
+    expect(mailer.sendMail).toHaveBeenCalledTimes(5);
   });
 
   test('4. as admin: list accounts, confirm created_by is present and correct', async () => {
@@ -318,6 +380,33 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body).not.toHaveProperty('password');
   });
 
+  test('9b. as admin: reassign an account to a different reseller updates creator_id', async () => {
+    const res = await adminAgent
+      .patch(`/api/accounts/${reassignAccountId}/reassign`)
+      .send({ resellerId: reseller2Id });
+
+    expect(res.status).toBe(200);
+    expect(res.body.creator_id).toBe(reseller2Id);
+  });
+
+  test('9c. as admin: reassign with a resellerId that is not a reseller is rejected with 400', async () => {
+    const res = await adminAgent
+      .patch(`/api/accounts/${reassignAccountId}/reassign`)
+      .send({ resellerId: TEST_ADMIN.id });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'resellerId does not reference an existing reseller' });
+  });
+
+  test('9d. as admin: reassigning a nonexistent account returns 404', async () => {
+    const res = await adminAgent
+      .patch('/api/accounts/999999/reassign')
+      .send({ resellerId: reseller2Id });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Account not found' });
+  });
+
   test('10. login as the reseller who owns the account (agent B)', async () => {
     resellerAgent = request.agent(app);
 
@@ -356,6 +445,28 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(disableRes.status).toBe(404);
   });
 
+  test('13b. as reseller: creating an account directly is forbidden', async () => {
+    const res = await resellerAgent.post('/api/accounts').send({
+      authid: `resellerattempt_${Date.now()}`,
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      resellerId,
+      email: 'resellerattempt@example.com',
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: 'Admin access required' });
+  });
+
+  test('13c. as reseller: reassigning an account is forbidden', async () => {
+    const res = await resellerAgent
+      .patch(`/api/accounts/${accountId}/reassign`)
+      .send({ resellerId: reseller2Id });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: 'Admin access required' });
+  });
+
   test('14. as reseller: DELETE is forbidden', async () => {
     const res = await resellerAgent.delete(`/api/accounts/${accountId}`);
 
@@ -370,6 +481,9 @@ describe('Accounts flow (admin + reseller)', () => {
 
     const del2 = await adminAgent.delete(`/api/accounts/${otherAccountId}`);
     expect(del2.status).toBe(200);
+
+    const del3 = await adminAgent.delete(`/api/accounts/${reassignAccountId}`);
+    expect(del3.status).toBe(200);
 
     const getRes = await adminAgent.get(`/api/accounts/${accountId}`);
     expect(getRes.status).toBe(404);

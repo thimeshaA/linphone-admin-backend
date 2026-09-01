@@ -4,14 +4,18 @@ const {
   getAccountById,
   findAccountByAuthid,
   createAccount,
+  reassignAccountCreator,
   renewAccount,
   disableAccount,
   updateAccountPassword,
   deleteAccount,
 } = require('../models/accountModel');
-const { getAdminStatusById, findAdminUsernamesByIds } = require('../models/adminModel');
+const { getResellerById, findAdminById, findAdminUsernamesByIds } = require('../models/adminModel');
 const { sendMail } = require('../utils/mailer');
+const { renderBatchAccountRequestHtml } = require('../utils/emailTemplates');
 const { isValidEmail, isValidUsername } = require('../utils/validators');
+
+const REQUEST_RECIPIENT = 'enigma-admin@prometeolk.com';
 
 function hashPassword(authid, domain, password) {
   return crypto.createHash('md5').update(`${authid}:${domain}:${password}`).digest('hex');
@@ -21,6 +25,40 @@ function defaultExpiresAt() {
   const date = new Date();
   date.setMonth(date.getMonth() + 6);
   return date;
+}
+
+async function validateResellerId(resellerId) {
+  if (resellerId === undefined || resellerId === null) {
+    return { error: 'resellerId is required' };
+  }
+
+  const reseller = await getResellerById(resellerId);
+  if (!reseller) {
+    return { error: 'resellerId does not reference an existing reseller' };
+  }
+  if (reseller.status === 'disabled') {
+    return { error: 'Cannot assign account to a disabled reseller' };
+  }
+
+  return { reseller };
+}
+
+function buildBatchRequestEmailBody({ resellerUsername, resellerEmail, requests }, submittedAt) {
+  const lines = [
+    `Submitted at: ${submittedAt}`,
+    `Reseller: ${resellerUsername}${resellerEmail ? ` <${resellerEmail}>` : ''}`,
+    `Requested accounts: ${requests.length}`,
+    '',
+  ];
+
+  requests.forEach((entry, i) => {
+    lines.push(`${i + 1}. ${entry.name}`);
+    if (entry.email) lines.push(`   Email: ${entry.email}`);
+    if (entry.phone) lines.push(`   Phone: ${entry.phone}`);
+    if (entry.note) lines.push(`   Note: ${entry.note}`);
+  });
+
+  return lines.join('\n');
 }
 
 async function list(req, res) {
@@ -49,7 +87,7 @@ async function getOne(req, res) {
 }
 
 async function create(req, res) {
-  const { authid, domain, password, status, expires_at, creator_id, email } = req.body;
+  const { authid, domain, password, status, expires_at, resellerId, email } = req.body;
 
   const errors = {};
 
@@ -74,12 +112,9 @@ async function create(req, res) {
     return res.status(400).json({ errors });
   }
 
-  const creator = await getAdminStatusById(creator_id);
-  if (!creator) {
-    return res.status(400).json({ error: 'creator_id does not reference an existing admin' });
-  }
-  if (creator.status === 'disabled') {
-    return res.status(400).json({ error: 'Cannot assign account to a disabled reseller' });
+  const { error: resellerError } = await validateResellerId(resellerId);
+  if (resellerError) {
+    return res.status(400).json({ error: resellerError });
   }
 
   const existing = await findAccountByAuthid(authid);
@@ -93,7 +128,7 @@ async function create(req, res) {
     passwordHash: hashPassword(authid, domain, password),
     status: status || 'active',
     expiresAt: expires_at || defaultExpiresAt(),
-    creatorId: creator_id,
+    creatorId: resellerId,
     email,
   });
 
@@ -109,6 +144,71 @@ async function create(req, res) {
   }
 
   return res.status(201).json(account);
+}
+
+async function reassign(req, res) {
+  const { resellerId } = req.body;
+
+  const { error } = await validateResellerId(resellerId);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
+  const account = await reassignAccountCreator(req.params.id, resellerId);
+  if (!account) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+
+  return res.json(account);
+}
+
+async function requestAccounts(req, res) {
+  const { requests } = req.body;
+
+  if (!Array.isArray(requests) || requests.length === 0) {
+    return res.status(400).json({ error: 'requests must be a non-empty array of end-users' });
+  }
+
+  const errors = [];
+  requests.forEach((entry, i) => {
+    if (!entry || !String(entry.name || '').trim()) {
+      errors.push(`requests[${i}].name is required`);
+      return;
+    }
+    if (entry.email && !isValidEmail(entry.email)) {
+      errors.push(`requests[${i}].email is invalid`);
+      return;
+    }
+    const hasPhone = entry.phone && String(entry.phone).trim();
+    if (!entry.email && !hasPhone) {
+      errors.push(`requests[${i}] must include a valid email or a phone`);
+    }
+  });
+
+  if (errors.length > 0) {
+    return res.status(400).json({ errors });
+  }
+
+  const requester = await findAdminById(req.admin.id);
+  const resellerUsername = requester ? requester.username : req.admin.username;
+  const resellerEmail = requester ? requester.email : null;
+
+  const submittedAt = new Date().toISOString();
+  const fields = { resellerUsername, resellerEmail, requests };
+
+  try {
+    await sendMail({
+      to: REQUEST_RECIPIENT,
+      subject: `New SIP account request from ${resellerUsername} (${requests.length})`,
+      text: buildBatchRequestEmailBody(fields, submittedAt),
+      html: renderBatchAccountRequestHtml(fields, submittedAt),
+      replyTo: resellerEmail || undefined,
+    });
+  } catch (err) {
+    return res.status(502).json({ error: 'Failed to send request email' });
+  }
+
+  return res.status(201).json({ message: 'Request submitted successfully' });
 }
 
 async function renew(req, res) {
@@ -159,4 +259,14 @@ async function remove(req, res) {
   return res.json({ message: 'Account deleted successfully' });
 }
 
-module.exports = { list, getOne, create, renew, disable, updatePassword, remove };
+module.exports = {
+  list,
+  getOne,
+  create,
+  reassign,
+  renew,
+  disable,
+  updatePassword,
+  remove,
+  requestAccounts,
+};
