@@ -34,18 +34,18 @@ description: |-
 
   ## Request Requirements
   - **Required body fields:**
-    - `authid` (string) — SIP username, e.g. `"alice"`.
+    - `authid` (string) — SIP username, e.g. `"alice"`. 1-64 characters; letters, digits, `.`, `_`, `-` only (no `@`, no whitespace). Unique across the entire `auth_users` table — the same authid cannot be reused on a different domain.
     - `domain` (string) — SIP domain, e.g. `"sip.example.com"`.
     - `password` (string) — plaintext password; hashed server-side as `MD5(authid:domain:password)`.
-    - `email` (string) — valid contact email; stored on the account and used to send the credentials email below.
+    - `email` (string) — valid contact email; stored on the account and used to send the credentials email below. Not required to be unique — multiple accounts may share the same contact email.
   - **Optional body fields:**
     - `expires_at` (ISO date string) — account expiry date; defaults to +6 months from now if omitted.
     - `creator_id` (integer) — admin-only; ignored for resellers.
 
   ## Responses
   - **201 Created** — account created successfully.
-  - **400 Bad Request** — missing/invalid `email`, `creator_id` does not exist in `auth_admins`, or the referenced reseller is disabled.
-  - **409 Conflict** — an account with the same `(authid, domain)` pair already exists.
+  - **400 Bad Request** — field-specific validation errors, e.g. `{ "errors": { "authid": "...", "email": "..." } }`. Also returned when `creator_id` does not exist in `auth_admins` or the referenced reseller is disabled (flat `{ "error": "..." }` shape in that case).
+  - **409 Conflict** — an account with this `authid` already exists (`{ "error": "An account with this authid already exists" }`).
   - **401 Unauthorized** — missing or invalid auth token.
 
   ## Notes

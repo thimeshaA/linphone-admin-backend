@@ -8,6 +8,7 @@ const TEST_ADMIN_PASSWORD_HASH = bcrypt.hashSync(TEST_ADMIN_PASSWORD, 10);
 const TEST_ADMIN = {
   id: 1,
   username: 'testadmin',
+  email: 'testadmin@example.com',
   password_hash: TEST_ADMIN_PASSWORD_HASH,
   role: 'admin',
   status: 'active',

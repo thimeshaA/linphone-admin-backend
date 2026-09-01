@@ -3,7 +3,7 @@ const {
   list,
   getOne,
   create,
-  updateStatus,
+  update,
   resetPassword,
   remove,
   renew,
@@ -18,7 +18,7 @@ router.use(verifyToken, requireAdmin);
 router.get('/', list);
 router.get('/:id', getOne);
 router.post('/', create);
-router.patch('/:id', updateStatus);
+router.patch('/:id', update);
 router.patch('/:id/reset-password', resetPassword);
 router.patch('/:id/renew', renew);
 router.delete('/:id', remove);

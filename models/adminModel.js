@@ -1,9 +1,20 @@
 const { adminPool } = require('../config/db');
 
-async function findAdminByUsername(username) {
+// Matches on username OR email so login accepts either interchangeably.
+// Safe to reuse for username-uniqueness checks too: usernames can never
+// contain '@', so a username value can never spuriously match the email side.
+async function findAdminByUsername(identifier) {
   const [rows] = await adminPool.query(
-    'SELECT id, username, password_hash, role, status, expires_at, expired_at, email, created_at FROM admins WHERE username = ? LIMIT 1',
-    [username]
+    'SELECT id, username, password_hash, role, status, expires_at, expired_at, email, created_at FROM admins WHERE username = ? OR email = ? LIMIT 1',
+    [identifier, identifier]
+  );
+  return rows[0] || null;
+}
+
+async function findAdminByEmail(email) {
+  const [rows] = await adminPool.query(
+    'SELECT id, username, password_hash, role, status, expires_at, expired_at, email, created_at FROM admins WHERE email = ? LIMIT 1',
+    [email]
   );
   return rows[0] || null;
 }
@@ -121,6 +132,15 @@ async function updateResellerStatus(id, status) {
   return getResellerById(id);
 }
 
+async function updateResellerEmail(id, email) {
+  const [result] = await adminPool.query(
+    "UPDATE admins SET email = ? WHERE id = ? AND role = 'reseller'",
+    [email, id]
+  );
+  if (result.affectedRows === 0) return null;
+  return getResellerById(id);
+}
+
 async function updateResellerPassword(id, passwordHash) {
   const [result] = await adminPool.query(
     "UPDATE admins SET password_hash = ? WHERE id = ? AND role = 'reseller'",
@@ -138,6 +158,7 @@ async function deleteReseller(id) {
 
 module.exports = {
   findAdminByUsername,
+  findAdminByEmail,
   adminExistsById,
   getAdminStatusById,
   findAdminUsernamesByIds,
@@ -147,6 +168,7 @@ module.exports = {
   getResellerById,
   createReseller,
   updateResellerStatus,
+  updateResellerEmail,
   updateResellerPassword,
   deleteReseller,
   renewReseller,

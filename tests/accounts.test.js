@@ -75,8 +75,8 @@ function wireMocks() {
     return row;
   }
 
-  accountModel.findAccountByAuthidDomain.mockImplementation(async (authid, domain) => {
-    const row = Object.values(accountsById).find((r) => r.authid === authid && r.domain === domain);
+  accountModel.findAccountByAuthid.mockImplementation(async (authid) => {
+    const row = Object.values(accountsById).find((r) => r.authid === authid);
     return row ? { id: row.id } : null;
   });
 
@@ -206,6 +206,47 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body.creator_id).toBe(resellerId);
     accountId = res.body.id;
     expect(mailer.sendMail).toHaveBeenCalledTimes(2);
+  });
+
+  test('3a. an email-shaped authid is rejected with a field-specific 400', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: 'not an authid@example.com',
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      creator_id: resellerId,
+      email: 'valid@example.com',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('authid');
+    expect(res.body.errors).not.toHaveProperty('email');
+  });
+
+  test('3a2. a malformed email is rejected with a field-specific 400', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: `testuser_${Date.now()}_bad_email`,
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      creator_id: resellerId,
+      email: 'not-an-email',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('email');
+    expect(res.body.errors).not.toHaveProperty('authid');
+  });
+
+  test('3c. reusing the same authid on a different domain is rejected with 409', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: accountAuthid,
+      domain: 'a-completely-different-domain.example.com',
+      password: 'AccountPass123!',
+      creator_id: resellerId,
+      email: 'someoneelse@example.com',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'An account with this authid already exists' });
   });
 
   test('3b. as admin: create a second throwaway account owned by a different creator', async () => {

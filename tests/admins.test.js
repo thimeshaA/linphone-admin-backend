@@ -12,17 +12,23 @@ const app = require('../index');
 // In-memory fake "admins" table backing every mocked adminModel function, so
 // sequential steps in this flow observe consistent state without a real DB.
 let adminsByUsername;
+let adminsByEmail;
 let resellersById;
 let nextId;
 
 function seedStore() {
   adminsByUsername = { [TEST_ADMIN.username]: TEST_ADMIN };
+  adminsByEmail = {};
   resellersById = {};
   nextId = 100;
 }
 
 function wireMocks() {
-  adminModel.findAdminByUsername.mockImplementation(async (username) => adminsByUsername[username] || null);
+  adminModel.findAdminByUsername.mockImplementation(
+    async (identifier) => adminsByUsername[identifier] || adminsByEmail[identifier] || null
+  );
+
+  adminModel.findAdminByEmail.mockImplementation(async (email) => adminsByEmail[email] || null);
 
   adminModel.listResellers.mockImplementation(async (status) => {
     let rows = Object.values(resellersById);
@@ -49,6 +55,7 @@ function wireMocks() {
     };
     resellersById[id] = publicRow;
     adminsByUsername[username] = { ...publicRow, password_hash: passwordHash };
+    adminsByEmail[email] = adminsByUsername[username];
     return { ...publicRow };
   });
 
@@ -76,6 +83,16 @@ function wireMocks() {
     return { ...row };
   });
 
+  adminModel.updateResellerEmail.mockImplementation(async (id, email) => {
+    const row = resellersById[id];
+    if (!row) return null;
+    delete adminsByEmail[row.email];
+    row.email = email;
+    if (adminsByUsername[row.username]) adminsByUsername[row.username].email = email;
+    adminsByEmail[email] = adminsByUsername[row.username];
+    return { ...row };
+  });
+
   adminModel.updateResellerPassword.mockImplementation(async (id, passwordHash) => {
     const row = resellersById[id];
     if (!row) return false;
@@ -88,6 +105,7 @@ function wireMocks() {
     if (!row) return false;
     delete resellersById[id];
     delete adminsByUsername[row.username];
+    delete adminsByEmail[row.email];
     return true;
   });
 }
@@ -148,6 +166,35 @@ describe('Admins (reseller management) flow', () => {
     expect(res.body).toEqual({ error: 'Username already exists' });
   });
 
+  test('3b. creating with the same email but a different username is rejected with 409', async () => {
+    const res = await adminAgent
+      .post('/api/admins')
+      .send({ username: `${resellerUsername}_other`, password: 'SomeOtherPass1!', email: 'reseller@example.com' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'Email already exists' });
+  });
+
+  test('3c. an email-shaped username is rejected with a field-specific 400', async () => {
+    const res = await adminAgent
+      .post('/api/admins')
+      .send({ username: 'not an email@example.com', password: 'SomeOtherPass1!', email: 'valid@example.com' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('username');
+    expect(res.body.errors).not.toHaveProperty('email');
+  });
+
+  test('3d. a malformed email is rejected with a field-specific 400', async () => {
+    const res = await adminAgent
+      .post('/api/admins')
+      .send({ username: `${resellerUsername}_new`, password: 'SomeOtherPass1!', email: 'not-an-email' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('email');
+    expect(res.body.errors).not.toHaveProperty('username');
+  });
+
   test('4. list resellers includes the new one', async () => {
     const res = await adminAgent.get('/api/admins');
 
@@ -168,6 +215,40 @@ describe('Admins (reseller management) flow', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('disabled');
+  });
+
+  test('6b. attempting to change username via PATCH is rejected with a field-specific 400', async () => {
+    const res = await adminAgent
+      .patch(`/api/admins/${resellerId}`)
+      .send({ username: 'someone-else' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ errors: { username: 'username cannot be changed after creation' } });
+    expect(adminsByUsername[resellerUsername]).toBeDefined();
+  });
+
+  test('6c. updating email via PATCH succeeds and is reflected in subsequent reads', async () => {
+    const res = await adminAgent
+      .patch(`/api/admins/${resellerId}`)
+      .send({ email: 'reseller-updated@example.com' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.email).toBe('reseller-updated@example.com');
+
+    const getRes = await adminAgent.get(`/api/admins/${resellerId}`);
+    expect(getRes.body.email).toBe('reseller-updated@example.com');
+  });
+
+  test('6d. updating email to one already in use is rejected with 409', async () => {
+    const takenEmail = 'someone-else@example.com';
+    adminsByEmail[takenEmail] = { id: 999999 };
+
+    const res = await adminAgent.patch(`/api/admins/${resellerId}`).send({ email: takenEmail });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'Email already exists' });
+
+    delete adminsByEmail[takenEmail];
   });
 
   test('7. login as that reseller fails with 403 while disabled', async () => {

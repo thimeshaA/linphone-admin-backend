@@ -41,6 +41,19 @@ describe('Auth flow', () => {
     });
   });
 
+  test('2b. login with the email instead of the username also succeeds', async () => {
+    adminModel.findAdminByUsername.mockImplementation(async (identifier) =>
+      identifier === TEST_ADMIN.username || identifier === TEST_ADMIN.email ? TEST_ADMIN : null
+    );
+
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ username: TEST_ADMIN.email, password: TEST_ADMIN_PASSWORD });
+
+    expect(res.status).toBe(200);
+    expect(res.body.username).toBe(TEST_ADMIN.username);
+  });
+
   test('3. login with the wrong password fails with 401', async () => {
     adminModel.findAdminByUsername.mockResolvedValue(TEST_ADMIN);
 

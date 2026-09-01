@@ -1,16 +1,18 @@
 const bcrypt = require('bcrypt');
 const {
   findAdminByUsername,
+  findAdminByEmail,
   listResellers,
   getResellerById,
   createReseller,
   updateResellerStatus,
+  updateResellerEmail,
   updateResellerPassword,
   deleteReseller,
   renewReseller,
 } = require('../models/adminModel');
 const { sendMail } = require('../utils/mailer');
-const { isValidEmail } = require('../utils/validators');
+const { isValidEmail, isValidUsername } = require('../utils/validators');
 
 const SALT_ROUNDS = 10;
 
@@ -44,17 +46,37 @@ async function getOne(req, res) {
 async function create(req, res) {
   const { username, password, expires_at, email } = req.body;
 
-  if (!username || !password) {
-    return res.status(400).json({ error: 'username and password are required' });
+  const errors = {};
+
+  if (!isValidUsername(username)) {
+    errors.username =
+      'username is required (1-64 characters) and may only contain letters, digits, ".", "_" and "-"';
   }
 
   if (!isValidEmail(email)) {
-    return res.status(400).json({ error: 'a valid email is required' });
+    errors.email = 'a valid email is required';
   }
 
-  const existing = await findAdminByUsername(username);
-  if (existing) {
+  if (!password) {
+    errors.password = 'password is required';
+  }
+
+  if (expires_at !== undefined && expires_at !== null && Number.isNaN(new Date(expires_at).getTime())) {
+    errors.expires_at = 'expires_at must be a valid date';
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return res.status(400).json({ errors });
+  }
+
+  const existingUsername = await findAdminByUsername(username);
+  if (existingUsername) {
     return res.status(409).json({ error: 'Username already exists' });
+  }
+
+  const existingEmail = await findAdminByEmail(email);
+  if (existingEmail) {
+    return res.status(409).json({ error: 'Email already exists' });
   }
 
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
@@ -91,16 +113,52 @@ async function renew(req, res) {
   return res.json(reseller);
 }
 
-async function updateStatus(req, res) {
-  const { status } = req.body;
+async function update(req, res) {
+  const { status, email, username } = req.body;
 
-  if (status !== 'active' && status !== 'disabled') {
-    return res.status(400).json({ error: 'status must be "active" or "disabled"' });
+  if (username !== undefined) {
+    return res.status(400).json({ errors: { username: 'username cannot be changed after creation' } });
   }
 
-  const updated = await updateResellerStatus(req.params.id, status);
-  if (!updated) {
-    return res.status(404).json({ error: 'Reseller not found' });
+  if (status === undefined && email === undefined) {
+    return res.status(400).json({ error: 'status or email is required' });
+  }
+
+  const errors = {};
+
+  if (status !== undefined && status !== 'active' && status !== 'disabled') {
+    errors.status = 'status must be "active" or "disabled"';
+  }
+
+  if (email !== undefined && !isValidEmail(email)) {
+    errors.email = 'a valid email is required';
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return res.status(400).json({ errors });
+  }
+
+  if (email !== undefined) {
+    const existingEmail = await findAdminByEmail(email);
+    if (existingEmail && String(existingEmail.id) !== String(req.params.id)) {
+      return res.status(409).json({ error: 'Email already exists' });
+    }
+  }
+
+  let updated = null;
+
+  if (status !== undefined) {
+    updated = await updateResellerStatus(req.params.id, status);
+    if (!updated) {
+      return res.status(404).json({ error: 'Reseller not found' });
+    }
+  }
+
+  if (email !== undefined) {
+    updated = await updateResellerEmail(req.params.id, email);
+    if (!updated) {
+      return res.status(404).json({ error: 'Reseller not found' });
+    }
   }
 
   return res.json(updated);
@@ -133,4 +191,4 @@ async function remove(req, res) {
   return res.json({ message: 'Reseller deleted successfully' });
 }
 
-module.exports = { list, getOne, create, updateStatus, resetPassword, remove, renew };
+module.exports = { list, getOne, create, update, resetPassword, remove, renew };

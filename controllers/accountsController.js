@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const {
   listAccounts,
   getAccountById,
-  findAccountByAuthidDomain,
+  findAccountByAuthid,
   createAccount,
   renewAccount,
   disableAccount,
@@ -11,7 +11,7 @@ const {
 } = require('../models/accountModel');
 const { getAdminStatusById, findAdminUsernamesByIds } = require('../models/adminModel');
 const { sendMail } = require('../utils/mailer');
-const { isValidEmail } = require('../utils/validators');
+const { isValidEmail, isValidUsername } = require('../utils/validators');
 
 function hashPassword(authid, domain, password) {
   return crypto.createHash('md5').update(`${authid}:${domain}:${password}`).digest('hex');
@@ -51,12 +51,27 @@ async function getOne(req, res) {
 async function create(req, res) {
   const { authid, domain, password, status, expires_at, creator_id, email } = req.body;
 
-  if (!authid || !domain || !password) {
-    return res.status(400).json({ error: 'authid, domain and password are required' });
+  const errors = {};
+
+  if (!isValidUsername(authid)) {
+    errors.authid =
+      'authid is required (1-64 characters) and may only contain letters, digits, ".", "_" and "-"';
+  }
+
+  if (!domain) {
+    errors.domain = 'domain is required';
+  }
+
+  if (!password) {
+    errors.password = 'password is required';
   }
 
   if (!isValidEmail(email)) {
-    return res.status(400).json({ error: 'a valid email is required' });
+    errors.email = 'a valid email is required';
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return res.status(400).json({ errors });
   }
 
   const creator = await getAdminStatusById(creator_id);
@@ -67,9 +82,9 @@ async function create(req, res) {
     return res.status(400).json({ error: 'Cannot assign account to a disabled reseller' });
   }
 
-  const existing = await findAccountByAuthidDomain(authid, domain);
+  const existing = await findAccountByAuthid(authid);
   if (existing) {
-    return res.status(409).json({ error: 'An account with this authid and domain already exists' });
+    return res.status(409).json({ error: 'An account with this authid already exists' });
   }
 
   const account = await createAccount({

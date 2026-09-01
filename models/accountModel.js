@@ -41,11 +41,10 @@ async function getAccountById(id, scopeFilter) {
   return rows[0] || null;
 }
 
-async function findAccountByAuthidDomain(authid, domain) {
-  const [rows] = await flexisipPool.query(
-    'SELECT id FROM auth_users WHERE authid = ? AND domain = ? LIMIT 1',
-    [authid, domain]
-  );
+async function findAccountByAuthid(authid) {
+  const [rows] = await flexisipPool.query('SELECT id FROM auth_users WHERE authid = ? LIMIT 1', [
+    authid,
+  ]);
   return rows[0] || null;
 }
 
@@ -111,7 +110,7 @@ module.exports = {
   buildScopedWhereClause,
   listAccounts,
   getAccountById,
-  findAccountByAuthidDomain,
+  findAccountByAuthid,
   createAccount,
   renewAccount,
   disableAccount,
