@@ -17,20 +17,6 @@ async function getAccountRows(scopeFilter, periodStart, periodEnd) {
   return rows;
 }
 
-// Unscoped: used by the (admin-only) resellers report, which lists every
-// reseller regardless of who "owns" the viewing session.
-async function getAccountCountsByReseller(periodStart, periodEnd) {
-  const [rows] = await flexisipPool.query(
-    `SELECT creator_id, COUNT(*) AS count
-     FROM auth_users
-     WHERE created_at >= ? AND created_at < ?
-     GROUP BY creator_id`,
-    [periodStart, periodEnd]
-  );
-  return rows.map((row) => ({ creatorId: row.creator_id, count: Number(row.count) || 0 }));
-}
-
 module.exports = {
   getAccountRows,
-  getAccountCountsByReseller,
 };

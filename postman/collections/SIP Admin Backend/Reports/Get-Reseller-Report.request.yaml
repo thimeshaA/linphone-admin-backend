@@ -34,11 +34,12 @@ description: |-
     - `year` — required when `period=annual`, format `YYYY`.
 
   ## Responses
-  - **200 OK** — `application/pdf` binary body (landscape A4), `Content-Disposition: attachment; filename="reseller-report-<period>.pdf"`.
-    - Columns: `id`, `username`, `email`, `status`, `created_at`, `expires_at`, `expired_at`, `accounts_created` (accounts that reseller created within the requested period — the only period-scoped column; every reseller appears regardless of when *they* were created).
+  - **200 OK** — `application/pdf` binary body (landscape A4), `Content-Disposition: attachment; filename="reseller-report-<period>.pdf"`. Two tables:
+    - **Resellers** — `id`, `username`, `email`, `status`, `created_at`, `expires_at`, `expired_at`, `accounts_created` (accounts that reseller created within the requested period — the only period-scoped column; every reseller appears regardless of when *they* were created, including ones with `accounts_created = 0`).
+    - **Accounts** — every account created within the period, across every reseller (same columns as the accounts report's detail table, always including `created_by`). This is what backs the `accounts_created` counts above — it's also how an account created by a since-deleted reseller still surfaces (as `Reseller #<id>`) instead of silently vanishing from the report.
   - **400 Bad Request** — `period` missing/invalid, or the matching `month`/`year` param is missing or malformed.
   - **403 Forbidden** — authenticated as a reseller, not an admin.
   - **401 Unauthorized** — missing or invalid auth token.
 
   ## Notes
-  `password_hash` is never selected or rendered — every column is pulled from a fixed non-sensitive column list, not `SELECT *`. The `accounts_created` computation is new server-side logic — previously this kind of per-reseller account count (`getResellerAccountStats`) only existed client-side in the frontend, derived from `GET /accounts` + `GET /admins`.
+  `password_hash` is never selected or rendered — every column is pulled from a fixed non-sensitive column list, not `SELECT *`. The per-reseller account count is new server-side logic — previously this kind of thing (`getResellerAccountStats`) only existed client-side in the frontend, derived from `GET /accounts` + `GET /admins`.

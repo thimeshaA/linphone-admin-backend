@@ -81,13 +81,19 @@ describe('Reports', () => {
     ]);
 
     reportsModel.getAccountRows.mockResolvedValue([accountRow()]);
-    reportsModel.getAccountCountsByReseller.mockResolvedValue([{ creatorId: TEST_RESELLER.id, count: 1 }]);
   });
 
   beforeEach(() => {
     // clearAllMocks wipes call history only; mockImplementation/mockResolvedValue
     // set in beforeAll survive it (only mockReset/mockRestore remove those).
     jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    // A spy created mid-test (spyOnRenderedTables) must never survive past its
+    // test even if an assertion above it throws first — otherwise a mocked
+    // renderReportPdf silently leaks into every later test's real PDF checks.
+    jest.restoreAllMocks();
   });
 
   test('1. login as admin', async () => {
@@ -159,11 +165,9 @@ describe('Reports', () => {
       expect(res.status).toBe(200);
 
       const [, options] = spy.mock.calls[0];
-      const serialized = JSON.stringify(options.tables);
+      const serialized = JSON.stringify(options.sections);
       expect(serialized).not.toContain('password');
       expect(serialized).not.toContain('should-never-appear');
-
-      spy.mockRestore();
     });
 
     test('8. missing period is rejected with 400', async () => {
@@ -194,7 +198,7 @@ describe('Reports', () => {
   });
 
   describe('GET /api/reports/resellers', () => {
-    test('13. admin: monthly report succeeds with correct PDF headers', async () => {
+    test('13. admin: monthly report succeeds, fetches unscoped account rows for the same period, and resolves reseller usernames for the account detail table', async () => {
       const res = await adminAgent.get('/api/reports/resellers?period=monthly&month=2026-08');
 
       expect(res.status).toBe(200);
@@ -203,7 +207,25 @@ describe('Reports', () => {
       expect(pdfBuffer(res).slice(0, 4).toString()).toBe('%PDF');
 
       expect(adminModel.listResellers).toHaveBeenCalledWith();
-      expect(reportsModel.getAccountCountsByReseller).toHaveBeenCalledWith(new Date(2026, 7, 1), new Date(2026, 8, 1));
+      expect(reportsModel.getAccountRows).toHaveBeenCalledWith({}, new Date(2026, 7, 1), new Date(2026, 8, 1));
+      expect(adminModel.findAdminUsernamesByIds).toHaveBeenCalledWith([TEST_RESELLER.id]);
+    });
+
+    test('13b. admin: a reseller with zero accounts in the period still appears with a 0 count, and an account whose reseller no longer exists still appears in the detail table', async () => {
+      reportsModel.getAccountRows.mockResolvedValueOnce([accountRow({ id: 2, creator_id: 9999 })]);
+      const spy = spyOnRenderedTables();
+
+      const res = await adminAgent.get('/api/reports/resellers?period=monthly&month=2026-08');
+      expect(res.status).toBe(200);
+
+      const [, options] = spy.mock.calls[0];
+      const resellersSection = options.sections.find((s) => s.title === 'Top Resellers');
+      const accountsSection = options.sections.find((s) => s.title === 'Account Detail');
+      expect(
+        resellersSection.table.rows.find((r) => r.username === TEST_RESELLER.username).accounts_created
+      ).toBe(0);
+      expect(accountsSection.rows).toHaveLength(1);
+      expect(accountsSection.rows[0].created_by).toBe('Reseller #9999');
     });
 
     test('14. admin: annual report succeeds with a year-based filename', async () => {
@@ -231,11 +253,9 @@ describe('Reports', () => {
       expect(res.status).toBe(200);
 
       const [, options] = spy.mock.calls[0];
-      const serialized = JSON.stringify(options.tables);
+      const serialized = JSON.stringify(options.sections);
       expect(serialized).not.toContain('password');
       expect(serialized).not.toContain('should-never-appear');
-
-      spy.mockRestore();
     });
 
     test('16. reseller: forbidden with 403', async () => {
