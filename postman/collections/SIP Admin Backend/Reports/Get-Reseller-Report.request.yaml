@@ -16,10 +16,10 @@ params:
     description: 'Required when period=annual. Format YYYY.'
 description: |-
   ## Purpose
-  Generates a PDF report of reseller activity for a given monthly or annual period: totals, active/disabled/expired counts (as of generation time), resellers created in the period, and a breakdown of accounts assigned to each reseller.
+  Generates a row-per-reseller PDF report: every reseller (`admins` table, `role = 'reseller'`), regardless of when they were created, each annotated with how many accounts they created within the requested period.
 
   ## Use Case
-  Admin-only business report for reviewing reseller growth and account distribution across the reseller network.
+  Admin-only business/data report for reviewing the full reseller roster alongside their period-scoped account creation activity — complementary to the accounts report (which is row-per-account) rather than a filtered duplicate of it.
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
@@ -34,10 +34,11 @@ description: |-
     - `year` — required when `period=annual`, format `YYYY`.
 
   ## Responses
-  - **200 OK** — `application/pdf` binary body, `Content-Disposition: attachment; filename="reseller-report-<period>.pdf"`.
+  - **200 OK** — `application/pdf` binary body (landscape A4), `Content-Disposition: attachment; filename="reseller-report-<period>.pdf"`.
+    - Columns: `id`, `username`, `email`, `status`, `created_at`, `expires_at`, `expired_at`, `accounts_created` (accounts that reseller created within the requested period — the only period-scoped column; every reseller appears regardless of when *they* were created).
   - **400 Bad Request** — `period` missing/invalid, or the matching `month`/`year` param is missing or malformed.
   - **403 Forbidden** — authenticated as a reseller, not an admin.
   - **401 Unauthorized** — missing or invalid auth token.
 
   ## Notes
-  Per-reseller assigned-account counts (total/active/disabled) are computed server-side here for the first time — previously this logic (`getResellerAccountStats`) only existed client-side in the frontend, derived from `GET /accounts` + `GET /admins`.
+  `password_hash` is never selected or rendered — every column is pulled from a fixed non-sensitive column list, not `SELECT *`. The `accounts_created` computation is new server-side logic — previously this kind of per-reseller account count (`getResellerAccountStats`) only existed client-side in the frontend, derived from `GET /accounts` + `GET /admins`.

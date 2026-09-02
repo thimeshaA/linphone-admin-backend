@@ -16,15 +16,15 @@ params:
     description: 'Required when period=annual. Format YYYY.'
 description: |-
   ## Purpose
-  Generates a PDF report of SIP account activity for a given monthly or annual period: totals, active/disabled/expired counts (as of generation time), accounts created in the period, and accounts renewed in the period.
+  Generates a row-per-account PDF report of every SIP account (`auth_users`) created within a given monthly or annual period.
 
   ## Use Case
-  Handed to admins or resellers as a downloadable business report — e.g. a reseller reviewing their own account activity for the past month, or an admin reviewing platform-wide activity plus a per-reseller breakdown.
+  Handed to admins or resellers as a downloadable, exportable data report — e.g. a reseller pulling every account they created last month, or an admin pulling the full platform list plus a per-reseller totals breakdown.
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
-  - **Admins** get platform-wide stats plus a breakdown table of accounts created per reseller within the period.
-  - **Resellers** get stats scoped to only their own accounts (same `applyOwnershipFilter` scoping as `GET /api/accounts`); no per-reseller breakdown.
+  - **Admins** get every account platform-wide, each row annotated with the reseller username that created it (`created_by`), plus a leading summary table totalling accounts created per reseller for the period.
+  - **Resellers** get only the accounts they created (same `applyOwnershipFilter` scoping as `GET /api/accounts`); no `created_by` column (it would always be them) and no per-reseller summary.
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
@@ -34,9 +34,11 @@ description: |-
     - `year` — required when `period=annual`, format `YYYY`.
 
   ## Responses
-  - **200 OK** — `application/pdf` binary body, `Content-Disposition: attachment; filename="account-report-<period>.pdf"`.
+  - **200 OK** — `application/pdf` binary body (landscape A4), `Content-Disposition: attachment; filename="account-report-<period>.pdf"`.
+    - Detail table columns: `id`, `authid`, `domain`, `email`, `status`, `created_at`, `expires_at`, `disabled_at`, `expired_at`, `renewed_at`, and (admin only) `created_by`.
+    - Rows are filtered on `created_at` falling within the requested period — this is a "created in period" report, not a snapshot of accounts still active during the period.
   - **400 Bad Request** — `period` missing/invalid, or the matching `month`/`year` param is missing or malformed.
   - **401 Unauthorized** — missing or invalid auth token.
 
   ## Notes
-  "Expired" is computed live from `expires_at` at generation time rather than trusting the stored `status` column, since accounts are never lazily flipped to `expired` outside of this computation.
+  `password` is never selected or rendered — every column is pulled from a fixed non-sensitive column list, not `SELECT *`.
