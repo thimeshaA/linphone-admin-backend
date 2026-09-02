@@ -1,7 +1,7 @@
 const { flexisipPool } = require('../config/db');
 
 const PUBLIC_COLUMNS =
-  'id, authid, domain, created_at, status, expires_at, disabled_at, expired_at, creator_id, email';
+  'id, authid, domain, created_at, status, expires_at, disabled_at, expired_at, renewed_at, creator_id, email';
 
 function buildScopedWhereClause(scopeFilter) {
   if (scopeFilter && scopeFilter.creator_id !== undefined) {
@@ -64,7 +64,7 @@ async function renewAccount(id, scopeFilter, expiresAt) {
   const { condition, params } = buildScopedWhereClause(scopeFilter);
   const isFuture = new Date(expiresAt) > new Date();
 
-  let sql = 'UPDATE auth_users SET expires_at = ?';
+  let sql = 'UPDATE auth_users SET expires_at = ?, renewed_at = NOW()';
   const queryParams = [expiresAt];
 
   if (isFuture) {

@@ -1,0 +1,43 @@
+$kind: http-request
+name: Get Reseller Report
+method: GET
+url: '{{baseUrl}}/api/reports/resellers'
+order: 1001
+params:
+  - key: period
+    value: monthly
+    description: '"monthly" or "annual"'
+  - key: month
+    value: '2026-08'
+    description: 'Required when period=monthly. Format YYYY-MM.'
+  - key: year
+    value: '2026'
+    disabled: true
+    description: 'Required when period=annual. Format YYYY.'
+description: |-
+  ## Purpose
+  Generates a PDF report of reseller activity for a given monthly or annual period: totals, active/disabled/expired counts (as of generation time), resellers created in the period, and a breakdown of accounts assigned to each reseller.
+
+  ## Use Case
+  Admin-only business report for reviewing reseller growth and account distribution across the reseller network.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admin only** — gated with the same `requireAdmin` middleware used on `/api/admins`.
+  - **Resellers** get **403**, not just a hidden UI option.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **Required query params:**
+    - `period` — `monthly` or `annual`.
+    - `month` — required when `period=monthly`, format `YYYY-MM`.
+    - `year` — required when `period=annual`, format `YYYY`.
+
+  ## Responses
+  - **200 OK** — `application/pdf` binary body, `Content-Disposition: attachment; filename="reseller-report-<period>.pdf"`.
+  - **400 Bad Request** — `period` missing/invalid, or the matching `month`/`year` param is missing or malformed.
+  - **403 Forbidden** — authenticated as a reseller, not an admin.
+  - **401 Unauthorized** — missing or invalid auth token.
+
+  ## Notes
+  Per-reseller assigned-account counts (total/active/disabled) are computed server-side here for the first time — previously this logic (`getResellerAccountStats`) only existed client-side in the frontend, derived from `GET /accounts` + `GET /admins`.
