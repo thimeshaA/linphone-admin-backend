@@ -9,6 +9,23 @@ const LOGO_PATH = path.join(__dirname, '..', 'assets', 'logo-light.png');
 const LOGO_MARK_DARK_PATH = path.join(__dirname, '..', 'assets', 'logo-mark-dark.png');
 const LOGO_SIZE = 26;
 
+// The report is portrait A4 throughout except sections carrying a wide data
+// table (see sectionNeedsLandscape), which switch to landscape so columns
+// stay legible. `doc._pageOptions` tracks which one new pages should use —
+// addPage() with no options reverts pdfkit to the *document's original*
+// options, not the current page's, so every page-break site must go through
+// addReportPage() rather than a bare doc.addPage().
+const PORTRAIT_OPTIONS = { size: 'A4', margin: PAGE_MARGIN };
+const LANDSCAPE_OPTIONS = { size: 'A4', layout: 'landscape', margin: PAGE_MARGIN };
+
+function addReportPage(doc) {
+  doc.addPage(doc._pageOptions);
+}
+
+function sectionNeedsLandscape(section) {
+  return section.kind === 'table' || (section.kind === 'bar-and-table' && !!section.table);
+}
+
 function formatDateTime(date) {
   return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
@@ -30,7 +47,7 @@ function contentWidth(doc) {
 function ensureSpace(doc, neededHeight) {
   const bottom = doc.page.height - doc.page.margins.bottom - FOOTER_RESERVE;
   if (doc.y + neededHeight > bottom) {
-    doc.addPage();
+    addReportPage(doc);
   }
 }
 
@@ -443,7 +460,7 @@ function renderTable(doc, { title, columns, rows }) {
   rows.forEach((row, idx) => {
     const bottom = doc.page.height - doc.page.margins.bottom - FOOTER_RESERVE;
     if (y + rowHeight > bottom) {
-      doc.addPage();
+      addReportPage(doc);
       y = doc.y; // the 'pageAdded' running-header handler already reserved this
       drawHeaderRow(y);
       y += headerHeight;
@@ -478,18 +495,29 @@ function renderTable(doc, { title, columns, rows }) {
 // ---------------------------------------------------------------------------
 
 function renderReportPdf(stream, { reportTitle, periodLabel, generatedAt, sections }) {
-  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: PAGE_MARGIN, bufferPages: true });
+  const doc = new PDFDocument({ ...PORTRAIT_OPTIONS, bufferPages: true });
+  doc._pageOptions = PORTRAIT_OPTIONS;
   doc.pipe(stream);
 
   let currentLabel = sections.length ? `01 - ${sections[0].title}` : '';
   doc.on('pageAdded', () => drawRunningHeader(doc, currentLabel));
 
   renderCover(doc, { reportTitle, periodLabel, generatedAt });
-  doc.addPage();
+  addReportPage(doc);
+
+  let isLandscape = false;
 
   sections.forEach((section, i) => {
     const number = i + 1;
     currentLabel = `${String(number).padStart(2, '0')} - ${section.title}`;
+
+    const needsLandscape = sectionNeedsLandscape(section);
+    if (needsLandscape !== isLandscape) {
+      isLandscape = needsLandscape;
+      doc._pageOptions = isLandscape ? LANDSCAPE_OPTIONS : PORTRAIT_OPTIONS;
+      addReportPage(doc);
+    }
+
     renderSectionHeading(doc, number, section.title);
 
     if (section.kind === 'kpis') {

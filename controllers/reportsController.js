@@ -52,6 +52,9 @@ function sendPdf(res, filename, options) {
   pdfReport.renderReportPdf(res, { generatedAt: new Date(), ...options });
 }
 
+// This table renders on a landscape page (see sectionNeedsLandscape in
+// pdfReport.js) — the rest of the report is portrait A4, but 11 columns of
+// real data don't fit legibly in portrait's ~495pt content width.
 const ACCOUNT_DETAIL_COLUMNS = [
   { key: 'id', label: 'ID', width: 32, align: 'right' },
   { key: 'authid', label: 'Auth ID', flex: 2, align: 'left' },
