@@ -1,7 +1,7 @@
 // Mirrors the frontend's design tokens (linphone-admin-frontend/styles/globals.css).
 // That palette is deliberately five colours with no dedicated red/amber, so
 // "expiring" borrows the SIP-identity orange and "disabled" stays grayscale.
-const PRODUCT_NAME = 'Admin Control';
+const PRODUCT_NAME = 'SIP Admin Control';
 
 const INK = '#090909';
 const PAPER = '#FFFFFF';
