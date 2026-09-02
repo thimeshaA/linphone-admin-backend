@@ -30,7 +30,7 @@ function buildRequestEmailBody(fields, submittedAt) {
   return [`Submitted at: ${submittedAt}`, '', formatSubmissionDetails(fields)].join('\n');
 }
 
-// The visitor's own copy — confirms receipt and repeats what they submitted,
+// The visitor's own copy - confirms receipt and repeats what they submitted,
 // so they have a record of it and can catch a typo (e.g. in their phone
 // number) even though it was sent to their own address.
 function buildConfirmationEmailBody(fields, submittedAt) {
@@ -88,7 +88,7 @@ async function submitAccessRequest(req, res) {
   }
 
   // Best-effort: the visitor's own mailbox rejecting this copy doesn't mean
-  // their request failed — operations already has it from the send above.
+  // their request failed - operations already has it from the send above.
   try {
     await sendMail({
       to: email,

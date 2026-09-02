@@ -119,7 +119,7 @@ async function forgotPassword(req, res) {
   const admin = await findAdminByEmail(email);
 
   // Always do the same amount of visible work regardless of match, and
-  // always return the same response — an attacker must not be able to tell
+  // always return the same response - an attacker must not be able to tell
   // whether an email is registered from either the response or its timing.
   if (admin) {
     const rawToken = crypto.randomBytes(32).toString('hex');

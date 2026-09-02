@@ -10,25 +10,25 @@ params:
     description: 'Filter by admin status (active, disabled, or expired)'
 description: |-
   ## Purpose
-  Lists all reseller accounts from `auth_admins`. Only returns rows with `role: reseller` — the primary admin account is never included in this list.
+  Lists all reseller accounts from `auth_admins`. Only returns rows with `role: reseller` - the primary admin account is never included in this list.
 
   ## Use Case
-  Used by the admin dashboard to display and manage all reseller accounts — for example, to review who is active, or to find a reseller before updating their status.
+  Used by the admin dashboard to display and manage all reseller accounts - for example, to review who is active, or to find a reseller before updating their status.
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
-  - **Admin-only** — resellers receive **403 Forbidden** on this and every other endpoint in this group.
+  - **Admin-only** - resellers receive **403 Forbidden** on this and every other endpoint in this group.
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
   - No body or URL params required.
   - **Optional query param:**
-    - `?status=` — filter by reseller status (`active`, `disabled`, or `expired`).
+    - `?status=` - filter by reseller status (`active`, `disabled`, or `expired`).
 
   ## Responses
-  - **200 OK** — array of reseller objects, including `expires_at`/`expired_at`. `password_hash` is never included.
-  - **403 Forbidden** — caller is a reseller.
-  - **401 Unauthorized** — missing or invalid auth token.
+  - **200 OK** - array of reseller objects, including `expires_at`/`expired_at`. `password_hash` is never included.
+  - **403 Forbidden** - caller is a reseller.
+  - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
   The primary admin account (created via direct SQL) is intentionally excluded from this list and cannot be managed through this API.

@@ -1,7 +1,7 @@
 // HTML shells for transactional emails, styled to match the Admin Control
 // frontend's brand (the lime "AC" mark, and the SIP/eSIM accent colours used
 // for module tags across the app). Table-based markup with inline styles
-// only — no <style> block reliance — since Outlook and a lot of mobile mail
+// only - no <style> block reliance - since Outlook and a lot of mobile mail
 // clients strip or ignore embedded stylesheets.
 
 const BRAND = {
@@ -14,7 +14,7 @@ const BRAND = {
   accent: '#b7f211', // --success, the lime brand accent used on the "AC" mark
   accentInk: '#0a0a0a',
   sip: '#ee7c43', // --sip
-  esim: '#0d9488', // darker teal, not the raw --esim cyan — stays legible as text/pill on a white card
+  esim: '#0d9488', // darker teal, not the raw --esim cyan - stays legible as text/pill on a white card
 };
 
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
@@ -190,7 +190,7 @@ function renderVisitorConfirmationHtml(fields, submittedAt) {
     ],
     rowsHtml: requestDetailRows(fields),
     footerNote:
-      "This is an automated confirmation — no reply needed. If you didn't submit this request, you can safely ignore this email.",
+      "This is an automated confirmation - no reply needed. If you didn't submit this request, you can safely ignore this email.",
   });
 }
 
@@ -198,7 +198,7 @@ function requestedAccountRow(index, entry) {
   const contact = [entry.email, entry.phone].filter(Boolean).join(' / ');
   const parts = [contact];
   if (entry.note) parts.push(`Note: ${entry.note}`);
-  return detailRow(`#${index} ${entry.name}`, parts.join(' — '));
+  return detailRow(`#${index} ${entry.name}`, parts.join(' - '));
 }
 
 function renderBatchAccountRequestHtml({ resellerUsername, resellerEmail, requests }, submittedAt) {
@@ -231,7 +231,7 @@ function renderPasswordResetHtml({ username, resetUrl, expiresInMinutes }) {
     intro: [
       `Hi ${escapeHtml(username)},`,
       `We received a request to reset your Admin Control password. Click the button below to choose a new one. This link expires in ${expiresInMinutes} minutes.`,
-      "If you didn't request this, you can safely ignore this email — your password won't change.",
+      "If you didn't request this, you can safely ignore this email - your password won't change.",
     ],
     rowsHtml: resetButtonRow(escapeHtml(resetUrl)),
     footerNote: 'For your security, this link can only be used once.',

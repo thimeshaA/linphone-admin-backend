@@ -11,13 +11,13 @@ description: |-
   Called at the start of a debugging session or as part of a deployment health check to verify the backend is live before sending any authenticated requests.
 
   ## Authentication
-  - No authentication required — this endpoint is fully public.
+  - No authentication required - this endpoint is fully public.
 
   ## Request Requirements
   - No body, URL params, or query params needed.
 
   ## Responses
-  - **200 OK** — `{ "status": "ok" }` — server is running normally.
+  - **200 OK** - `{ "status": "ok" }` - server is running normally.
 
   ## Notes
   This endpoint has no business logic and no database dependency. It only confirms the Node process is up and accepting connections.

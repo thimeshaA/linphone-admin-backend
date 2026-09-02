@@ -31,25 +31,25 @@ description: |-
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
-  - **Reseller-only** — admins receive **403 Forbidden** (they create accounts directly and don't need this flow).
+  - **Reseller-only** - admins receive **403 Forbidden** (they create accounts directly and don't need this flow).
   - Returns **401** if the auth cookie is missing, invalid, or expired.
-  - The requesting reseller's identity (username, email) is read from the authenticated session/JWT and the `admins` table — never trusted from the request body.
+  - The requesting reseller's identity (username, email) is read from the authenticated session/JWT and the `admins` table - never trusted from the request body.
 
   ## Request Requirements
   - **Required body field:**
-    - `requests` (array, non-empty) — one entry per requested end-user. Each entry requires:
+    - `requests` (array, non-empty) - one entry per requested end-user. Each entry requires:
       - `name` (string)
       - at least one of `email` (valid email) or `phone`
       - `note` (string, optional)
 
   ## Responses
-  - **201 Created** — `{ "message": "Request submitted successfully" }`. Only returned once the operations email has actually been sent.
-  - **400 Bad Request** — `requests` missing/empty, or a per-entry validation failure (`{ "error": "..." }` or `{ "errors": [...] }`).
-  - **403 Forbidden** — caller is an admin, not a reseller.
-  - **502 Bad Gateway** — the request was well-formed but the operations email failed to send (SMTP error). Since nothing is persisted anywhere, a failed send means the request is entirely lost.
-  - **401 Unauthorized** — missing or invalid auth token.
+  - **201 Created** - `{ "message": "Request submitted successfully" }`. Only returned once the operations email has actually been sent.
+  - **400 Bad Request** - `requests` missing/empty, or a per-entry validation failure (`{ "error": "..." }` or `{ "errors": [...] }`).
+  - **403 Forbidden** - caller is an admin, not a reseller.
+  - **502 Bad Gateway** - the request was well-formed but the operations email failed to send (SMTP error). Since nothing is persisted anywhere, a failed send means the request is entirely lost.
+  - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
-  This is distinct from the public, unauthenticated `POST /api/requests` intake — that one is for prospective resellers/end-users with no account yet. This endpoint is for existing, logged-in resellers requesting accounts on behalf of their own customers.
+  This is distinct from the public, unauthenticated `POST /api/requests` intake - that one is for prospective resellers/end-users with no account yet. This endpoint is for existing, logged-in resellers requesting accounts on behalf of their own customers.
 
-  **No database write** of any kind — same no-persistence pattern as the public request flow. A single email is sent to `enigma-admin@prometeolk.com` via the shared `utils/mailer` transporter, listing every requested end-user in the batch and identifying the requesting reseller. Its `Reply-To` is set to the reseller's `email` on their `admins` row if one is present; omitted otherwise (never guessed).
+  **No database write** of any kind - same no-persistence pattern as the public request flow. A single email is sent to `enigma-admin@prometeolk.com` via the shared `utils/mailer` transporter, listing every requested end-user in the batch and identifying the requesting reseller. Its `Reply-To` is set to the reseller's `email` on their `admins` row if one is present; omitted otherwise (never guessed).

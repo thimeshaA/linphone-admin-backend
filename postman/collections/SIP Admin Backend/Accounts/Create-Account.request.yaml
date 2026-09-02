@@ -27,29 +27,29 @@ description: |-
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
-  - **Admin-only** — resellers always receive **403 Forbidden**. Resellers can no longer create accounts directly; they submit a batch request instead (see Request Accounts).
+  - **Admin-only** - resellers always receive **403 Forbidden**. Resellers can no longer create accounts directly; they submit a batch request instead (see Request Accounts).
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
   - **Required body fields:**
-    - `authid` (string) — SIP username, e.g. `"alice"`. 1-64 characters; letters, digits, `.`, `_`, `-` only (no `@`, no whitespace). Unique across the entire `auth_users` table — the same authid cannot be reused on a different domain.
-    - `domain` (string) — SIP domain, e.g. `"sip.example.com"`.
-    - `password` (string) — plaintext password; hashed server-side as `MD5(authid:domain:password)`.
-    - `email` (string) — valid contact email; stored on the account and used to send the credentials email below. Not required to be unique — multiple accounts may share the same contact email.
-    - `resellerId` (integer) — the id of the `admins` row that will own this account. Must reference an existing row with `role = 'reseller'`; validated the same way for both this endpoint and Reassign Account.
+    - `authid` (string) - SIP username, e.g. `"alice"`. 1-64 characters; letters, digits, `.`, `_`, `-` only (no `@`, no whitespace). Unique across the entire `auth_users` table - the same authid cannot be reused on a different domain.
+    - `domain` (string) - SIP domain, e.g. `"sip.example.com"`.
+    - `password` (string) - plaintext password; hashed server-side as `MD5(authid:domain:password)`.
+    - `email` (string) - valid contact email; stored on the account and used to send the credentials email below. Not required to be unique - multiple accounts may share the same contact email.
+    - `resellerId` (integer) - the id of the `admins` row that will own this account. Must reference an existing row with `role = 'reseller'`; validated the same way for both this endpoint and Reassign Account.
   - **Optional body fields:**
-    - `expires_at` (ISO date string) — account expiry date; defaults to +6 months from now if omitted.
+    - `expires_at` (ISO date string) - account expiry date; defaults to +6 months from now if omitted.
 
   ## Responses
-  - **201 Created** — account created successfully.
-  - **400 Bad Request** — field-specific validation errors, e.g. `{ "errors": { "authid": "...", "email": "..." } }`. Also returned as a flat `{ "error": "..." }` when `resellerId` is missing, does not reference an existing reseller, or references a disabled reseller.
-  - **403 Forbidden** — caller is a reseller; account creation is admin-only.
-  - **409 Conflict** — an account with this `authid` already exists (`{ "error": "An account with this authid already exists" }`).
-  - **401 Unauthorized** — missing or invalid auth token.
+  - **201 Created** - account created successfully.
+  - **400 Bad Request** - field-specific validation errors, e.g. `{ "errors": { "authid": "...", "email": "..." } }`. Also returned as a flat `{ "error": "..." }` when `resellerId` is missing, does not reference an existing reseller, or references a disabled reseller.
+  - **403 Forbidden** - caller is a reseller; account creation is admin-only.
+  - **409 Conflict** - an account with this `authid` already exists (`{ "error": "An account with this authid already exists" }`).
+  - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
-  The password hashing scheme is `MD5(authid:domain:password)` — this is Flexisip's required SIP digest format and is intentionally different from the bcrypt scheme used for admin/reseller login passwords. The plaintext password is never stored.
+  The password hashing scheme is `MD5(authid:domain:password)` - this is Flexisip's required SIP digest format and is intentionally different from the bcrypt scheme used for admin/reseller login passwords. The plaintext password is never stored.
 
-  After the account row is created, the backend emails `authid` and the **plaintext** password (captured before hashing) plus the `ADMIN_PANEL_URL` login link to `email`. If that email fails to send, account creation still succeeds (the DB write is not rolled back) — the failure is only logged server-side, not surfaced in the response. Sending a plaintext password by email is a known-imperfect pattern; a one-time setup-link flow is a possible future improvement.
+  After the account row is created, the backend emails `authid` and the **plaintext** password (captured before hashing) plus the `ADMIN_PANEL_URL` login link to `email`. If that email fails to send, account creation still succeeds (the DB write is not rolled back) - the failure is only logged server-side, not surfaced in the response. Sending a plaintext password by email is a known-imperfect pattern; a one-time setup-link flow is a possible future improvement.
 
-  `resellerId` is currently required on every create — there is no "unassigned" account state. Whether `auth_users.creator_id` allows `NULL` in the live schema has not been confirmed (no migration files exist in this repo and no DB was reachable to inspect it directly), so this endpoint deliberately avoids ever writing a `NULL` creator_id rather than assuming the constraint allows it.
+  `resellerId` is currently required on every create - there is no "unassigned" account state. Whether `auth_users.creator_id` allows `NULL` in the live schema has not been confirmed (no migration files exist in this repo and no DB was reachable to inspect it directly), so this endpoint deliberately avoids ever writing a `NULL` creator_id rather than assuming the constraint allows it.

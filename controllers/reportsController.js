@@ -3,11 +3,11 @@ const { findAdminUsernamesByIds, listResellers } = require('../models/adminModel
 const { parsePeriod } = require('../utils/reportPeriod');
 const pdfReport = require('../utils/pdfReport');
 
-const EMPTY = '—';
+const EMPTY = '-';
 const TOP_RESELLERS_LIMIT = 10;
 
 // Neither auth_users.status nor admins.status is ever lazily flipped to
-// "expired" outside of reseller login (see markResellerExpired) — so status
+// "expired" outside of reseller login (see markResellerExpired) - so status
 // pills/charts are classified live from expires_at, same 3-way split as the
 // frontend dashboard's "Active / Expiring ≤30 days / Disabled / expired"
 // stat cards, rather than trusting the stored status column.
@@ -139,18 +139,16 @@ async function accountsReport(req, res) {
       .map(([creatorId, count]) => ({ reseller: usernameMap[creatorId] || `Reseller #${creatorId}`, count }))
       .sort((a, b) => b.count - a.count);
 
+    // Bar chart only (no table underneath): the chart already labels every
+    // reseller with its count, so a flat table of the same two columns would
+    // just repeat it. Unlike the "Top Resellers" bar in the resellers report
+    // (which highlights a top-10 above a richer table), this is the only
+    // place this breakdown appears, so every reseller gets a bar - not just
+    // the top 10.
     sections.push({
       title: 'Reseller Breakdown',
       kind: 'bar-and-table',
-      bars: summaryRows.slice(0, TOP_RESELLERS_LIMIT).map((r) => ({ label: r.reseller, value: r.count })),
-      table: {
-        title: 'Accounts Created by Reseller',
-        columns: [
-          { key: 'reseller', label: 'Reseller', flex: 1, align: 'left' },
-          { key: 'count', label: 'Accounts Created', width: 130, align: 'right' },
-        ],
-        rows: summaryRows,
-      },
+      bars: summaryRows.map((r) => ({ label: r.reseller, value: r.count })),
     });
   }
 

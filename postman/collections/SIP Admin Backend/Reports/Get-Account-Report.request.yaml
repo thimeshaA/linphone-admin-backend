@@ -19,7 +19,7 @@ description: |-
   Generates a row-per-account PDF report of every SIP account (`auth_users`) created within a given monthly or annual period.
 
   ## Use Case
-  Handed to admins or resellers as a downloadable, exportable data report — e.g. a reseller pulling every account they created last month, or an admin pulling the full platform list plus a per-reseller totals breakdown.
+  Handed to admins or resellers as a downloadable, exportable data report - e.g. a reseller pulling every account they created last month, or an admin pulling the full platform list plus a per-reseller totals breakdown.
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
@@ -29,16 +29,16 @@ description: |-
 
   ## Request Requirements
   - **Required query params:**
-    - `period` — `monthly` or `annual`.
-    - `month` — required when `period=monthly`, format `YYYY-MM`.
-    - `year` — required when `period=annual`, format `YYYY`.
+    - `period` - `monthly` or `annual`.
+    - `month` - required when `period=monthly`, format `YYYY-MM`.
+    - `year` - required when `period=annual`, format `YYYY`.
 
   ## Responses
-  - **200 OK** — `application/pdf` binary body (landscape A4), `Content-Disposition: attachment; filename="account-report-<period>.pdf"`.
+  - **200 OK** - `application/pdf` binary body (landscape A4), `Content-Disposition: attachment; filename="account-report-<period>.pdf"`.
     - Detail table columns: `id`, `authid`, `domain`, `email`, `status`, `created_at`, `expires_at`, `disabled_at`, `expired_at`, `renewed_at`, and (admin only) `created_by`.
-    - Rows are filtered on `created_at` falling within the requested period — this is a "created in period" report, not a snapshot of accounts still active during the period.
-  - **400 Bad Request** — `period` missing/invalid, or the matching `month`/`year` param is missing or malformed.
-  - **401 Unauthorized** — missing or invalid auth token.
+    - Rows are filtered on `created_at` falling within the requested period - this is a "created in period" report, not a snapshot of accounts still active during the period.
+  - **400 Bad Request** - `period` missing/invalid, or the matching `month`/`year` param is missing or malformed.
+  - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
-  `password` is never selected or rendered — every column is pulled from a fixed non-sensitive column list, not `SELECT *`.
+  `password` is never selected or rendered - every column is pulled from a fixed non-sensitive column list, not `SELECT *`.

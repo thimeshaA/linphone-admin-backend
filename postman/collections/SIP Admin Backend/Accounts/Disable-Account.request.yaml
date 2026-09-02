@@ -17,7 +17,7 @@ description: |-
   Blocks a SIP account from logging in by setting `disabled_at` to the current timestamp. Does not affect the account's expiry state.
 
   ## Use Case
-  Called when a reseller needs to immediately suspend a customer's SIP access — for example, due to non-payment or a support hold — without deleting the account.
+  Called when a reseller needs to immediately suspend a customer's SIP access - for example, due to non-payment or a support hold - without deleting the account.
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
@@ -26,13 +26,13 @@ description: |-
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` — the numeric id of the SIP account to disable.
+  - **URL param:** `:id` - the numeric id of the SIP account to disable.
   - No body fields are required; the `disabled_at` timestamp is set server-side.
 
   ## Responses
-  - **200 OK** — account disabled; `disabled_at` is now set.
-  - **404 Not Found** — account does not exist, or reseller does not own it.
-  - **401 Unauthorized** — missing or invalid auth token.
+  - **200 OK** - account disabled; `disabled_at` is now set.
+  - **404 Not Found** - account does not exist, or reseller does not own it.
+  - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
-  Disabling sets `disabled_at` only — `expires_at` and `status` are left completely untouched. Disabling and expiring are two independent concepts. To re-enable an account, use the Renew Account endpoint (which resets status to `active` if the expiry is in the future).
+  Disabling sets `disabled_at` only - `expires_at` and `status` are left completely untouched. Disabling and expiring are two independent concepts. To re-enable an account, use the Renew Account endpoint (which resets status to `active` if the expiry is in the future).

@@ -24,26 +24,26 @@ description: |-
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
-  - **Admin-only** — resellers receive **403 Forbidden**.
+  - **Admin-only** - resellers receive **403 Forbidden**.
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
   - **Required body fields:**
-    - `username` (string) — unique login username for the reseller, e.g. `"newreseller"`.
-    - `password` (string) — plaintext password; hashed server-side with bcrypt.
-    - `email` (string) — valid contact email; stored on the reseller and used to send the credentials email below.
+    - `username` (string) - unique login username for the reseller, e.g. `"newreseller"`.
+    - `password` (string) - plaintext password; hashed server-side with bcrypt.
+    - `email` (string) - valid contact email; stored on the reseller and used to send the credentials email below.
   - **Optional body field:**
-    - `expires_at` (ISO date string) — initial expiry date for the reseller's access. Defaults to +6 months from now if omitted or `null`.
-  - No `role` field is accepted — it is always set to `reseller` server-side.
+    - `expires_at` (ISO date string) - initial expiry date for the reseller's access. Defaults to +6 months from now if omitted or `null`.
+  - No `role` field is accepted - it is always set to `reseller` server-side.
 
   ## Responses
-  - **201 Created** — reseller account created successfully.
-  - **400 Bad Request** — missing or invalid `email`.
-  - **409 Conflict** — a reseller with the same `username` already exists.
-  - **403 Forbidden** — caller is a reseller.
-  - **401 Unauthorized** — missing or invalid auth token.
+  - **201 Created** - reseller account created successfully.
+  - **400 Bad Request** - missing or invalid `email`.
+  - **409 Conflict** - a reseller with the same `username` already exists.
+  - **403 Forbidden** - caller is a reseller.
+  - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
-  Only one primary admin account is allowed to exist, and it is created manually via direct SQL — never through this API. The bcrypt password hashing used here is intentionally different from the `MD5(authid:domain:password)` scheme used for SIP accounts in `auth_users`.
+  Only one primary admin account is allowed to exist, and it is created manually via direct SQL - never through this API. The bcrypt password hashing used here is intentionally different from the `MD5(authid:domain:password)` scheme used for SIP accounts in `auth_users`.
 
-  After the reseller row is created, the backend emails `username` and the **plaintext** password (captured before hashing) plus the `ADMIN_PANEL_URL` login link to `email`. If that email fails to send, reseller creation still succeeds (the DB write is not rolled back) — the failure is only logged server-side, not surfaced in the response. Sending a plaintext password by email is a known-imperfect pattern; a one-time setup-link flow is a possible future improvement.
+  After the reseller row is created, the backend emails `username` and the **plaintext** password (captured before hashing) plus the `ADMIN_PANEL_URL` login link to `email`. If that email fails to send, reseller creation still succeeds (the DB write is not rolled back) - the failure is only logged server-side, not surfaced in the response. Sending a plaintext password by email is a known-imperfect pattern; a one-time setup-link flow is a possible future improvement.

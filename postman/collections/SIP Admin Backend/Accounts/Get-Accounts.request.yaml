@@ -28,12 +28,12 @@ description: |-
   ## Request Requirements
   - No body or URL params required.
   - **Optional query params:**
-    - `?status=` — filter accounts by status (e.g. `active`, `inactive`).
-    - `?search=` — partial match against `authid` or `domain`.
+    - `?status=` - filter accounts by status (e.g. `active`, `inactive`).
+    - `?search=` - partial match against `authid` or `domain`.
 
   ## Responses
-  - **200 OK** — array of account objects. The `password` field is never included.
-  - **401 Unauthorized** — missing or invalid auth token.
+  - **200 OK** - array of account objects. The `password` field is never included.
+  - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
   The `created_by` field is only present for admin responses and is resolved from a separate `auth_admins` database (cannot be JOINed directly). Resellers never see this field regardless of query params.

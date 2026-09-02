@@ -12,7 +12,7 @@ const app = require('../index');
 
 // pdfkit deflates its content streams by default, so a raw byte-search for a
 // leaked string on the response body would never find it either way (false
-// confidence, not a real check) — spy on the renderer instead and inspect the
+// confidence, not a real check) - spy on the renderer instead and inspect the
 // actual row objects the controller handed it.
 function spyOnRenderedTables() {
   const spy = jest.spyOn(pdfReport, 'renderReportPdf').mockImplementation((stream) => stream.end());
@@ -91,7 +91,7 @@ describe('Reports', () => {
 
   afterEach(() => {
     // A spy created mid-test (spyOnRenderedTables) must never survive past its
-    // test even if an assertion above it throws first — otherwise a mocked
+    // test even if an assertion above it throws first - otherwise a mocked
     // renderReportPdf silently leaks into every later test's real PDF checks.
     jest.restoreAllMocks();
   });

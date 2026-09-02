@@ -12,15 +12,15 @@ description: |-
 
   ## Authentication
   - Requires a valid auth cookie (`verifyToken`).
-  - Works for both the primary admin and any reseller — whoever is currently logged in.
+  - Works for both the primary admin and any reseller - whoever is currently logged in.
   - Returns **401** if the cookie is missing, invalid, or expired.
 
   ## Request Requirements
   - No body, URL params, or query params needed.
 
   ## Responses
-  - **200 OK** — `{ id, username, role }` of the currently authenticated user.
-  - **401 Unauthorized** — auth cookie is missing, invalid, or the JWT has expired.
+  - **200 OK** - `{ id, username, role }` of the currently authenticated user.
+  - **401 Unauthorized** - auth cookie is missing, invalid, or the JWT has expired.
 
   ## Notes
   This is the primary mechanism for the frontend to determine the logged-in user's role and decide which views and actions to show.

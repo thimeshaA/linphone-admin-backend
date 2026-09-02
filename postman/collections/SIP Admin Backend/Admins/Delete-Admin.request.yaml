@@ -12,18 +12,18 @@ description: |-
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
-  - **Admin-only** — resellers always receive **403 Forbidden**.
+  - **Admin-only** - resellers always receive **403 Forbidden**.
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` — the numeric id of the reseller to delete.
+  - **URL param:** `:id` - the numeric id of the reseller to delete.
   - No body or query params.
 
   ## Responses
-  - **200 OK** — reseller permanently deleted. Returns a simple success confirmation, not the deleted row.
-  - **403 Forbidden** — caller is a reseller; deletion is not permitted for this role.
-  - **404 Not Found** — no reseller with that id exists.
-  - **401 Unauthorized** — missing or invalid auth token.
+  - **200 OK** - reseller permanently deleted. Returns a simple success confirmation, not the deleted row.
+  - **403 Forbidden** - caller is a reseller; deletion is not permitted for this role.
+  - **404 Not Found** - no reseller with that id exists.
+  - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
-  Only reseller-role accounts can be deleted through this endpoint; the primary admin account can never be removed via this API. Deleting a reseller does not delete or reassign the SIP accounts they previously created — those `auth_users` rows keep their `creator_id` pointing at the now-deleted reseller.
+  Only reseller-role accounts can be deleted through this endpoint; the primary admin account can never be removed via this API. Deleting a reseller does not delete or reassign the SIP accounts they previously created - those `auth_users` rows keep their `creator_id` pointing at the now-deleted reseller.

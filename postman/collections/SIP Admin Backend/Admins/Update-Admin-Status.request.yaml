@@ -17,24 +17,24 @@ description: |-
   Enables or disables a reseller account. A disabled reseller can no longer log in to the system.
 
   ## Use Case
-  Called when the admin needs to suspend a reseller's access — for example, due to a billing issue — or to re-enable them after the issue is resolved.
+  Called when the admin needs to suspend a reseller's access - for example, due to a billing issue - or to re-enable them after the issue is resolved.
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
-  - **Admin-only** — resellers receive **403 Forbidden**.
+  - **Admin-only** - resellers receive **403 Forbidden**.
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` — the numeric id of the reseller to update.
+  - **URL param:** `:id` - the numeric id of the reseller to update.
   - **Required body field:**
-    - `status` (string) — must be `"active"` or `"disabled"`.
+    - `status` (string) - must be `"active"` or `"disabled"`.
   - No other fields can be changed through this endpoint (no username, password, or role changes).
 
   ## Responses
-  - **200 OK** — reseller status updated successfully.
-  - **404 Not Found** — no reseller with that id exists.
-  - **403 Forbidden** — caller is a reseller.
-  - **401 Unauthorized** — missing or invalid auth token.
+  - **200 OK** - reseller status updated successfully.
+  - **404 Not Found** - no reseller with that id exists.
+  - **403 Forbidden** - caller is a reseller.
+  - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
   Disabling a reseller prevents login but does not affect the SIP accounts they have already created. The `disabled` status is checked at login time, after password validation.

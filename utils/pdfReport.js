@@ -45,7 +45,7 @@ function renderCover(doc, { reportTitle, periodLabel, generatedAt }) {
 
   doc.rect(0, 0, w, h).fill(INK);
 
-  // Decorative abstract accent — not data-driven, just brand presence.
+  // Decorative abstract accent - not data-driven, just brand presence.
   doc.fillOpacity(0.9);
   doc.circle(w - 90, h - 160, 190).fill(ACCENT);
   doc.fillOpacity(0.75);
@@ -130,7 +130,7 @@ function renderFooters(doc) {
     const y = doc.page.height - doc.page.margins.bottom + 10;
 
     // Text landing below `margins.bottom` reads to pdfkit as overflow, which
-    // triggers an unwanted auto page-break — zero the margin for this write.
+    // triggers an unwanted auto page-break - zero the margin for this write.
     const originalBottom = doc.page.margins.bottom;
     doc.page.margins.bottom = 0;
 
@@ -155,7 +155,7 @@ function renderFooters(doc) {
 }
 
 // ---------------------------------------------------------------------------
-// Section heading — bold numbered treatment, alternating brand accent
+// Section heading - bold numbered treatment, alternating brand accent
 // ---------------------------------------------------------------------------
 
 function renderSectionHeading(doc, number, title) {
@@ -192,7 +192,7 @@ function renderSectionHeading(doc, number, title) {
 }
 
 // ---------------------------------------------------------------------------
-// KPI grid — bold-number cards with an alternating left-border accent
+// KPI grid - bold-number cards with an alternating left-border accent
 // ---------------------------------------------------------------------------
 
 function renderKpiGrid(doc, stats) {
@@ -238,7 +238,7 @@ function renderKpiGrid(doc, stats) {
 }
 
 // ---------------------------------------------------------------------------
-// Donut chart — status distribution, colored via the shared TONES map
+// Donut chart - status distribution, colored via the shared TONES map
 // ---------------------------------------------------------------------------
 
 function polarPoint(cx, cy, r, angle) {
@@ -318,7 +318,7 @@ function renderDonut(doc, segments) {
 }
 
 // ---------------------------------------------------------------------------
-// Horizontal bar chart — e.g. top resellers by volume
+// Horizontal bar chart - e.g. top resellers by volume
 // ---------------------------------------------------------------------------
 
 function renderBarChart(doc, bars) {
@@ -369,7 +369,7 @@ function renderBarChart(doc, bars) {
 }
 
 // ---------------------------------------------------------------------------
-// Data table — dark header, alternating rows, status badges, repeats on break
+// Data table - dark header, alternating rows, status badges, repeats on break
 // ---------------------------------------------------------------------------
 
 function computeColumnWidths(columns, totalWidth) {
@@ -481,7 +481,7 @@ function renderReportPdf(stream, { reportTitle, periodLabel, generatedAt, sectio
   const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: PAGE_MARGIN, bufferPages: true });
   doc.pipe(stream);
 
-  let currentLabel = sections.length ? `01 — ${sections[0].title}` : '';
+  let currentLabel = sections.length ? `01 - ${sections[0].title}` : '';
   doc.on('pageAdded', () => drawRunningHeader(doc, currentLabel));
 
   renderCover(doc, { reportTitle, periodLabel, generatedAt });
@@ -489,7 +489,7 @@ function renderReportPdf(stream, { reportTitle, periodLabel, generatedAt, sectio
 
   sections.forEach((section, i) => {
     const number = i + 1;
-    currentLabel = `${String(number).padStart(2, '0')} — ${section.title}`;
+    currentLabel = `${String(number).padStart(2, '0')} - ${section.title}`;
     renderSectionHeading(doc, number, section.title);
 
     if (section.kind === 'kpis') {
@@ -498,8 +498,10 @@ function renderReportPdf(stream, { reportTitle, periodLabel, generatedAt, sectio
       renderDonut(doc, section.segments);
     } else if (section.kind === 'bar-and-table') {
       renderBarChart(doc, section.bars);
-      doc.moveDown(0.6);
-      renderTable(doc, section.table);
+      if (section.table) {
+        doc.moveDown(0.6);
+        renderTable(doc, section.table);
+      }
     } else if (section.kind === 'table') {
       renderTable(doc, section);
     }
