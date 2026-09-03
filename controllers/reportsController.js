@@ -1,4 +1,4 @@
-const { getAccountRows } = require('../models/reportsModel');
+const { getAccountRows, getAccountCreationCounts } = require('../models/reportsModel');
 const { findAdminUsernamesByIds, listResellers } = require('../models/adminModel');
 const { parsePeriod } = require('../utils/reportPeriod');
 const pdfReport = require('../utils/pdfReport');
@@ -52,6 +52,15 @@ function sendPdf(res, filename, options) {
   pdfReport.renderReportPdf(res, { generatedAt: new Date(), ...options });
 }
 
+// Deterministic "{report-type}-{scope}-{period}.pdf" name shared by both report
+// endpoints, so the convention can't drift between them. Scope is "platform"
+// for admins (platform-wide data) or the reseller's own username, sanitized to
+// lowercase alphanumerics only, so it's always a safe Content-Disposition token.
+function reportFilename(reportType, req, slug) {
+  const scope = req.admin.role === 'admin' ? 'platform' : req.admin.username.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return `${reportType}-${scope}-${slug}.pdf`;
+}
+
 // This table renders on a landscape page (see sectionNeedsLandscape in
 // pdfReport.js) — the rest of the report is portrait A4, but 11 columns of
 // real data don't fit legibly in portrait's ~495pt content width.
@@ -101,6 +110,35 @@ function countByCreator(accounts) {
   return counts;
 }
 
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+// One bucket key per day of the report's month (monthly reports) or per
+// month of the report's year (annual reports), so the timeline chart always
+// shows every slot in the period - including ones the count query has no
+// row for - rather than only the days/months that had at least one account.
+function buildTimelineBuckets(periodType, start) {
+  const year = start.getFullYear();
+  if (periodType === 'monthly') {
+    const month = start.getMonth(); // 0-indexed
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    return Array.from({ length: daysInMonth }, (_, i) => {
+      const day = i + 1;
+      return { key: `${year}-${pad2(month + 1)}-${pad2(day)}`, label: String(day) };
+    });
+  }
+
+  return Array.from({ length: 12 }, (_, i) => ({ key: `${year}-${pad2(i + 1)}`, label: MONTH_ABBR[i] }));
+}
+
+function buildTimelineSeries(buckets, counts) {
+  const countMap = new Map(counts.map((c) => [c.bucket, Number(c.count)]));
+  return buckets.map((b) => ({ label: b.label, value: countMap.get(b.key) || 0 }));
+}
+
 async function accountsReport(req, res) {
   const { error, start, end, label, slug } = parsePeriod(req.query);
   if (error) {
@@ -108,11 +146,16 @@ async function accountsReport(req, res) {
   }
 
   const now = new Date();
-  const accounts = await getAccountRows(req.scopeFilter, start, end);
+  const bucketUnit = req.query.period === 'monthly' ? 'day' : 'month';
+  const [accounts, creationCounts] = await Promise.all([
+    getAccountRows(req.scopeFilter, start, end),
+    getAccountCreationCounts(req.scopeFilter, start, end, bucketUnit),
+  ]);
   const isAdmin = req.admin.role === 'admin';
 
   const usernameMap = isAdmin ? await usernamesForAccounts(accounts) : {};
   const statusCounts = summarizeStatuses(accounts, now);
+  const timelinePoints = buildTimelineSeries(buildTimelineBuckets(req.query.period, start), creationCounts);
 
   const detailRows = accounts.map((a) => {
     const row = buildAccountRow(a, now);
@@ -132,8 +175,9 @@ async function accountsReport(req, res) {
     },
     {
       title: 'Status Breakdown',
-      kind: 'donut',
+      kind: 'donut-and-timeline',
       segments: statusDonutSegments(statusCounts),
+      timeline: { points: timelinePoints },
     },
   ];
 
@@ -162,7 +206,7 @@ async function accountsReport(req, res) {
     rows: detailRows,
   });
 
-  sendPdf(res, `account-report-${slug}.pdf`, {
+  sendPdf(res, reportFilename('account-report', req, slug), {
     reportTitle: 'Account Management Report',
     periodLabel: label,
     sections,
@@ -199,7 +243,7 @@ async function resellersReport(req, res) {
 
   const accountRows = accounts.map((a) => withCreatedBy(buildAccountRow(a, now), a, usernameMap));
 
-  sendPdf(res, `reseller-report-${slug}.pdf`, {
+  sendPdf(res, reportFilename('reseller-report', req, slug), {
     reportTitle: 'Reseller Management Report',
     periodLabel: label,
     sections: [

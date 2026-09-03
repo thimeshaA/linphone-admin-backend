@@ -81,6 +81,7 @@ describe('Reports', () => {
     ]);
 
     reportsModel.getAccountRows.mockResolvedValue([accountRow()]);
+    reportsModel.getAccountCreationCounts.mockResolvedValue([]);
   });
 
   beforeEach(() => {
@@ -118,7 +119,7 @@ describe('Reports', () => {
 
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/^application\/pdf/);
-      expect(res.headers['content-disposition']).toBe('attachment; filename="account-report-2026-08.pdf"');
+      expect(res.headers['content-disposition']).toBe('attachment; filename="account-report-platform-2026-08.pdf"');
       expect(pdfBuffer(res).slice(0, 4).toString()).toBe('%PDF');
 
       expect(reportsModel.getAccountRows).toHaveBeenCalledWith({}, new Date(2026, 7, 1), new Date(2026, 8, 1));
@@ -129,7 +130,7 @@ describe('Reports', () => {
       const res = await adminAgent.get('/api/reports/accounts?period=annual&year=2026');
 
       expect(res.status).toBe(200);
-      expect(res.headers['content-disposition']).toBe('attachment; filename="account-report-2026.pdf"');
+      expect(res.headers['content-disposition']).toBe('attachment; filename="account-report-platform-2026.pdf"');
       expect(reportsModel.getAccountRows).toHaveBeenCalledWith({}, new Date(2026, 0, 1), new Date(2027, 0, 1));
     });
 
@@ -138,7 +139,7 @@ describe('Reports', () => {
 
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/^application\/pdf/);
-      expect(res.headers['content-disposition']).toBe('attachment; filename="account-report-2026-08.pdf"');
+      expect(res.headers['content-disposition']).toBe('attachment; filename="account-report-testresellerreports-2026-08.pdf"');
       expect(pdfBuffer(res).slice(0, 4).toString()).toBe('%PDF');
 
       expect(reportsModel.getAccountRows).toHaveBeenCalledWith(
@@ -152,7 +153,7 @@ describe('Reports', () => {
     test('6. reseller: annual report also succeeds', async () => {
       const res = await resellerAgent.get('/api/reports/accounts?period=annual&year=2026');
       expect(res.status).toBe(200);
-      expect(res.headers['content-disposition']).toBe('attachment; filename="account-report-2026.pdf"');
+      expect(res.headers['content-disposition']).toBe('attachment; filename="account-report-testresellerreports-2026.pdf"');
     });
 
     test('7. password/password_hash never reaches the PDF build even if the row carries it', async () => {
@@ -203,7 +204,7 @@ describe('Reports', () => {
 
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/^application\/pdf/);
-      expect(res.headers['content-disposition']).toBe('attachment; filename="reseller-report-2026-08.pdf"');
+      expect(res.headers['content-disposition']).toBe('attachment; filename="reseller-report-platform-2026-08.pdf"');
       expect(pdfBuffer(res).slice(0, 4).toString()).toBe('%PDF');
 
       expect(adminModel.listResellers).toHaveBeenCalledWith();
@@ -231,7 +232,7 @@ describe('Reports', () => {
     test('14. admin: annual report succeeds with a year-based filename', async () => {
       const res = await adminAgent.get('/api/reports/resellers?period=annual&year=2026');
       expect(res.status).toBe(200);
-      expect(res.headers['content-disposition']).toBe('attachment; filename="reseller-report-2026.pdf"');
+      expect(res.headers['content-disposition']).toBe('attachment; filename="reseller-report-platform-2026.pdf"');
     });
 
     test('15. password_hash never reaches the PDF build even if the reseller row carries it', async () => {

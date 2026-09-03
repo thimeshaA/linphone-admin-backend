@@ -335,6 +335,177 @@ function renderDonut(doc, segments) {
 }
 
 // ---------------------------------------------------------------------------
+// Status donut (compact) + creation timeline - side-by-side pair used by the
+// accounts report's "Status Breakdown" section. Both charts are drawn at
+// fixed x/y coordinates (rather than following doc.x/doc.y like the
+// full-width renderDonut above) so they can share one row without either one
+// advancing the cursor under the other.
+// ---------------------------------------------------------------------------
+
+function renderCompactDonut(doc, segments, { x, top, outerR, innerR, legendWidth }) {
+  const total = segments.reduce((sum, seg) => sum + seg.value, 0);
+  const cx = x + outerR;
+  const cy = top + outerR;
+  const STEP = Math.PI / 90; // 2-degree sampling
+
+  if (total > 0) {
+    let angle = -Math.PI / 2;
+    segments.forEach((seg) => {
+      if (seg.value <= 0) return;
+      const sweep = (seg.value / total) * Math.PI * 2;
+      const endAngle = angle + sweep;
+
+      const points = [];
+      for (let a = angle; a < endAngle; a += STEP) points.push(polarPoint(cx, cy, outerR, a));
+      points.push(polarPoint(cx, cy, outerR, endAngle));
+      for (let a = endAngle; a > angle; a -= STEP) points.push(polarPoint(cx, cy, innerR, a));
+      points.push(polarPoint(cx, cy, innerR, angle));
+
+      doc.polygon(...points).fill(toneColors(seg.tone).fill);
+      angle = endAngle;
+    });
+  } else {
+    doc.circle(cx, cy, outerR).fill(BORDER);
+    doc.circle(cx, cy, innerR).fill(PAPER);
+  }
+
+  doc
+    .fillColor(INK)
+    .font('Helvetica-Bold')
+    .fontSize(14)
+    .text(String(total), cx - innerR, cy - 9, { width: innerR * 2, align: 'center', lineBreak: false });
+  doc
+    .fillColor(INK)
+    .fillOpacity(0.55)
+    .font('Helvetica')
+    .fontSize(6)
+    .text('TOTAL', cx - innerR, cy + 6, { width: innerR * 2, align: 'center', lineBreak: false });
+  doc.fillOpacity(1);
+
+  const legendX = cx + outerR + 14;
+  let legendY = top + 2;
+  segments.forEach((seg) => {
+    const pct = total ? Math.round((seg.value / total) * 100) : 0;
+    doc.rect(legendX, legendY, 8, 8).fill(toneColors(seg.tone).fill);
+    doc
+      .fillColor(INK)
+      .font('Helvetica-Bold')
+      .fontSize(7.5)
+      .text(seg.label, legendX + 12, legendY - 1, { width: legendWidth, lineBreak: false, ellipsis: true });
+    doc
+      .fillColor(INK)
+      .fillOpacity(0.6)
+      .font('Helvetica')
+      .fontSize(7)
+      .text(`${seg.value} (${pct}%)`, legendX + 12, legendY + 9, { width: legendWidth, lineBreak: false });
+    doc.fillOpacity(1);
+    legendY += 26;
+  });
+
+  doc.fillColor(INK);
+}
+
+// Caps the number of x-axis ticks drawn so day-of-month labels (up to 31)
+// don't collide; annual reports have only 12 points so every month abbreviation
+// is always shown.
+function pickTimelineTicks(count, maxTicks) {
+  if (count <= maxTicks) return Array.from({ length: count }, (_, i) => i);
+  const step = Math.ceil((count - 1) / (maxTicks - 1));
+  const indices = [];
+  for (let i = 0; i < count; i += step) indices.push(i);
+  if (indices[indices.length - 1] !== count - 1) indices.push(count - 1);
+  return indices;
+}
+
+function renderTimelineChart(doc, points, { x, top, width, chartHeight, color }) {
+  const baseline = top + chartHeight;
+  const maxValue = Math.max(...points.map((p) => p.value), 1);
+  const count = points.length;
+  const stepX = count > 1 ? width / (count - 1) : 0;
+  const coords = points.map((p, i) => ({ x: x + i * stepX, y: baseline - (p.value / maxValue) * chartHeight }));
+
+  doc.fillOpacity(0.35);
+  doc.rect(x, top + chartHeight / 2, width, 1).fill(BORDER);
+  doc.fillOpacity(1);
+  doc.rect(x, baseline, width, 1).fill(BORDER);
+
+  if (coords.length > 1) {
+    doc.fillOpacity(0.16);
+    doc.polygon([x, baseline], ...coords.map((c) => [c.x, c.y]), [x + width, baseline]).fill(color);
+    doc.fillOpacity(1);
+
+    doc.lineWidth(1.5);
+    doc.moveTo(coords[0].x, coords[0].y);
+    coords.slice(1).forEach((c) => doc.lineTo(c.x, c.y));
+    doc.stroke(color);
+  }
+
+  pickTimelineTicks(count, 12).forEach((i) => {
+    const c = coords[i];
+    doc.circle(c.x, c.y, 1.3).fill(color);
+    doc
+      .fillColor(INK)
+      .fillOpacity(0.55)
+      .font('Helvetica')
+      .fontSize(6)
+      .text(points[i].label, c.x - 10, baseline + 4, { width: 20, align: 'center', lineBreak: false });
+  });
+
+  doc.fillOpacity(1).fillColor(INK);
+}
+
+function renderDonutAndTimeline(doc, { segments, timeline }) {
+  const left = doc.page.margins.left;
+  const width = contentWidth(doc);
+  const gap = 24;
+  const colWidth = (width - gap) / 2;
+  const rightX = left + colWidth + gap;
+
+  const outerR = 40;
+  const innerR = 22;
+  const legendWidth = colWidth - outerR * 2 - 14;
+  const donutBlockHeight = Math.max(outerR * 2, segments.length * 26);
+
+  const timelineChartHeight = 90;
+  const timelineBlockHeight = timelineChartHeight + 16;
+
+  const subLabelHeight = 16;
+  const rowHeight = subLabelHeight + Math.max(donutBlockHeight, timelineBlockHeight);
+
+  ensureSpace(doc, rowHeight + 20);
+
+  const subLabelY = doc.y;
+  doc
+    .fillColor(INK)
+    .fillOpacity(0.55)
+    .font('Helvetica-Bold')
+    .fontSize(9)
+    .text('STATUS BREAKDOWN', left, subLabelY, { width: colWidth, lineBreak: false });
+  doc
+    .fillColor(INK)
+    .fillOpacity(0.55)
+    .font('Helvetica-Bold')
+    .fontSize(9)
+    .text('ACCOUNT ACTIVITY', rightX, subLabelY, { width: colWidth, lineBreak: false });
+  doc.fillOpacity(1).fillColor(INK);
+
+  const chartTop = subLabelY + subLabelHeight;
+
+  renderCompactDonut(doc, segments, { x: left, top: chartTop, outerR, innerR, legendWidth });
+  renderTimelineChart(doc, timeline.points, {
+    x: rightX,
+    top: chartTop,
+    width: colWidth,
+    chartHeight: timelineChartHeight,
+    color: ORANGE,
+  });
+
+  doc.fillColor(INK);
+  doc.x = left;
+  doc.y = chartTop + Math.max(donutBlockHeight, timelineBlockHeight) + 14;
+}
+
+// ---------------------------------------------------------------------------
 // Horizontal bar chart - e.g. top resellers by volume
 // ---------------------------------------------------------------------------
 
@@ -524,6 +695,8 @@ function renderReportPdf(stream, { reportTitle, periodLabel, generatedAt, sectio
       renderKpiGrid(doc, section.stats);
     } else if (section.kind === 'donut') {
       renderDonut(doc, section.segments);
+    } else if (section.kind === 'donut-and-timeline') {
+      renderDonutAndTimeline(doc, section);
     } else if (section.kind === 'bar-and-table') {
       renderBarChart(doc, section.bars);
       if (section.table) {
