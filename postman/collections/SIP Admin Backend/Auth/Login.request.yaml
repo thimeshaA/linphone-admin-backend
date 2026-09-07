@@ -31,7 +31,10 @@ description: |-
   ## Responses
   - **200 OK** - login successful. Sets an httpOnly, `sameSite=strict` cookie containing a JWT (1 hour expiry). The token itself is not in the response body.
   - **401 Unauthorized** - wrong username or password. The response does not reveal which was incorrect.
-  - **403 Forbidden** - credentials are correct but the account's status is `disabled`. This check happens after password validation.
+  - **403 Forbidden** - either the account's status is `disabled`, or the account is temporarily locked out from too many recent failed attempts (see Notes). Both checks happen after password validation.
+  - **429 Too Many Requests** - IP+username rate limit exceeded (max 3 attempts per hour).
 
   ## Notes
   The generic 401 for wrong credentials (without specifying username vs. password) is intentional to prevent user enumeration. The 403 for disabled accounts is only returned after the password has been validated successfully.
+
+  Two independent brute-force defenses sit in front of this endpoint: an IP+username rate limiter (429 above), and a per-account lockout that locks the account for 1 hour after 3 consecutive failed attempts regardless of IP (403 above, with a "temporarily locked" message). A successful login, or a password change/reset, clears the per-account lockout counter. Every login attempt (success or failure) is written to the backend audit log.

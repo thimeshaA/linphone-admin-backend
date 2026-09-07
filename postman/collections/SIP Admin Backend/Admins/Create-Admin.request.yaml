@@ -30,7 +30,7 @@ description: |-
   ## Request Requirements
   - **Required body fields:**
     - `username` (string) - unique login username for the reseller, e.g. `"newreseller"`.
-    - `password` (string) - plaintext password; hashed server-side with bcrypt.
+    - `password` (string) - plaintext password; hashed server-side with bcrypt. Must be 10-128 characters and not on the local common-password blocklist - no forced complexity rules beyond that.
     - `email` (string) - valid contact email; stored on the reseller and used to send the credentials email below.
   - **Optional body field:**
     - `expires_at` (ISO date string) - initial expiry date for the reseller's access. Defaults to +6 months from now if omitted or `null`.
@@ -38,7 +38,7 @@ description: |-
 
   ## Responses
   - **201 Created** - reseller account created successfully.
-  - **400 Bad Request** - missing or invalid `email`.
+  - **400 Bad Request** - missing/invalid `email`, or `password` fails the password policy (returned as `errors.password`).
   - **409 Conflict** - a reseller with the same `username` already exists.
   - **403 Forbidden** - caller is a reseller.
   - **401 Unauthorized** - missing or invalid auth token.

@@ -238,9 +238,26 @@ function renderPasswordResetHtml({ username, resetUrl, expiresInMinutes }) {
   });
 }
 
+function renderPasswordChangedHtml({ username, changedAt }) {
+  return renderEmailShell({
+    module: undefined,
+    preheader: 'Your Admin Control password was just changed',
+    eyebrow: 'Security alert',
+    title: 'Your password was changed',
+    intro: [
+      `Hi ${escapeHtml(username)},`,
+      `This confirms your Admin Control password was changed on ${escapeHtml(formatSubmittedAt(changedAt))}.`,
+      "If this was you, no action is needed. If you didn't make this change, contact your administrator immediately - your account may be compromised.",
+    ],
+    rowsHtml: '',
+    footerNote: 'Automated security notification from Admin Control.',
+  });
+}
+
 module.exports = {
   renderOperationsNotificationHtml,
   renderVisitorConfirmationHtml,
   renderBatchAccountRequestHtml,
   renderPasswordResetHtml,
+  renderPasswordChangedHtml,
 };

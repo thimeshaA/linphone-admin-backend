@@ -3,9 +3,11 @@ const bcrypt = require('bcrypt');
 const { TEST_ADMIN_PASSWORD, TEST_ADMIN } = require('./helpers/fixtures');
 
 jest.mock('../models/adminModel');
+jest.mock('../models/auditLogModel');
 jest.mock('../utils/mailer');
 
 const adminModel = require('../models/adminModel');
+const auditLogModel = require('../models/auditLogModel');
 const mailer = require('../utils/mailer');
 const app = require('../index');
 
@@ -29,6 +31,13 @@ function wireMocks() {
   );
 
   adminModel.findAdminByEmail.mockImplementation(async (email) => adminsByEmail[email] || null);
+
+  // The acting admin's own current-password check in adminsController.resetPassword
+  // (step-up auth) looks itself up by id - TEST_ADMIN is the only admin identity
+  // this suite ever logs in as, so it's the only one that needs to resolve here.
+  adminModel.findAdminById.mockImplementation(async (id) =>
+    String(id) === String(TEST_ADMIN.id) ? TEST_ADMIN : null
+  );
 
   adminModel.listResellers.mockImplementation(async (status) => {
     let rows = Object.values(resellersById);
@@ -260,10 +269,38 @@ describe('Admins (reseller management) flow', () => {
     expect(res.body).toEqual({ error: 'Account is disabled' });
   });
 
-  test('8. reset that reseller\'s password as admin', async () => {
+  test('8a. reset-password without the admin\'s own currentPassword is rejected with 400', async () => {
     const res = await adminAgent
       .patch(`/api/admins/${resellerId}/reset-password`)
       .send({ newPassword: newResellerPassword });
+
+    expect(res.status).toBe(400);
+    expect(adminModel.updateResellerPassword).not.toHaveBeenCalled();
+  });
+
+  test('8b. reset-password with the wrong currentPassword for the acting admin is rejected with 401', async () => {
+    const res = await adminAgent
+      .patch(`/api/admins/${resellerId}/reset-password`)
+      .send({ currentPassword: 'NotTheAdminsPassword!', newPassword: newResellerPassword });
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'Current password is incorrect' });
+    expect(adminModel.updateResellerPassword).not.toHaveBeenCalled();
+  });
+
+  test('8c. reset-password with a weak newPassword is rejected with 400', async () => {
+    const res = await adminAgent
+      .patch(`/api/admins/${resellerId}/reset-password`)
+      .send({ currentPassword: TEST_ADMIN_PASSWORD, newPassword: 'short1!' });
+
+    expect(res.status).toBe(400);
+    expect(adminModel.updateResellerPassword).not.toHaveBeenCalled();
+  });
+
+  test('8. reset that reseller\'s password as admin (step-up auth: admin\'s own current password required)', async () => {
+    const res = await adminAgent
+      .patch(`/api/admins/${resellerId}/reset-password`)
+      .send({ currentPassword: TEST_ADMIN_PASSWORD, newPassword: newResellerPassword });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: 'Password reset successfully' });
@@ -271,6 +308,19 @@ describe('Admins (reseller management) flow', () => {
     // Sanity check the mock actually stored a real bcrypt hash of the new password.
     const stored = adminsByUsername[resellerUsername].password_hash;
     expect(bcrypt.compareSync(newResellerPassword, stored)).toBe(true);
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: TEST_ADMIN.id,
+        actorRole: TEST_ADMIN.role,
+        action: 'admin_reset_password',
+        targetId: String(resellerId),
+      })
+    );
+
+    expect(mailer.sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: adminsByUsername[resellerUsername].email })
+    );
   });
 
   test('9. update status back to active', async () => {

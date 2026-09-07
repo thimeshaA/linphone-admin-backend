@@ -2,6 +2,7 @@ const bcrypt = require('bcrypt');
 const {
   findAdminByUsername,
   findAdminByEmail,
+  findAdminById,
   listResellers,
   getResellerById,
   createReseller,
@@ -11,10 +12,25 @@ const {
   deleteReseller,
   renewReseller,
 } = require('../models/adminModel');
+const { createAuditLog } = require('../models/auditLogModel');
 const { sendMail } = require('../utils/mailer');
-const { isValidEmail, isValidUsername } = require('../utils/validators');
+const { renderPasswordChangedHtml } = require('../utils/emailTemplates');
+const { isValidEmail, isValidUsername, isValidPassword } = require('../utils/validators');
 
-const SALT_ROUNDS = 10;
+const SALT_ROUNDS = 12;
+
+async function notifyPasswordChanged(reseller) {
+  try {
+    await sendMail({
+      to: reseller.email,
+      subject: 'Your Admin Control password was changed',
+      text: `Hi ${reseller.username},\n\nAn administrator just reset your Admin Control password. If this wasn't expected, contact your administrator immediately.`,
+      html: renderPasswordChangedHtml({ username: reseller.username, changedAt: new Date() }),
+    });
+  } catch (err) {
+    console.error('Failed to send password-changed notification email:', err);
+  }
+}
 
 function defaultExpiresAt() {
   const date = new Date();
@@ -57,8 +73,9 @@ async function create(req, res) {
     errors.email = 'a valid email is required';
   }
 
-  if (!password) {
-    errors.password = 'password is required';
+  const passwordError = isValidPassword(password);
+  if (passwordError) {
+    errors.password = passwordError;
   }
 
   if (expires_at !== undefined && expires_at !== null && Number.isNaN(new Date(expires_at).getTime())) {
@@ -164,19 +181,49 @@ async function update(req, res) {
   return res.json(updated);
 }
 
+// Step-up auth: resetting another account's password is a highly privileged
+// action, so the acting admin must re-confirm their own current password
+// (same check as the self-service changePassword flow) rather than just
+// riding on an existing session cookie - this limits the blast radius of a
+// hijacked admin session.
 async function resetPassword(req, res) {
-  const { newPassword } = req.body;
+  const { currentPassword, newPassword } = req.body;
 
-  if (!newPassword) {
-    return res.status(400).json({ error: 'newPassword is required' });
+  if (!currentPassword) {
+    return res.status(400).json({ error: 'currentPassword is required' });
+  }
+
+  const passwordError = isValidPassword(newPassword);
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError });
+  }
+
+  const actingAdmin = await findAdminById(req.admin.id);
+  if (!actingAdmin) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+
+  const passwordMatches = await bcrypt.compare(currentPassword, actingAdmin.password_hash);
+  if (!passwordMatches) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+
+  const reseller = await getResellerById(req.params.id);
+  if (!reseller) {
+    return res.status(404).json({ error: 'Reseller not found' });
   }
 
   const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
-  const updated = await updateResellerPassword(req.params.id, passwordHash);
+  await updateResellerPassword(req.params.id, passwordHash);
 
-  if (!updated) {
-    return res.status(404).json({ error: 'Reseller not found' });
-  }
+  await createAuditLog({
+    actorId: actingAdmin.id,
+    actorRole: actingAdmin.role,
+    action: 'admin_reset_password',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
+  await notifyPasswordChanged(reseller);
 
   return res.json({ message: 'Password reset successfully' });
 }
