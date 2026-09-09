@@ -51,7 +51,6 @@ const LEDGER_ENTRIES = [
   { reseller_id: TEST_RESELLER.id, type: 'initial_credit', amount_usd: 100, created_at: new Date('2026-08-01T00:00:00Z') },
   { reseller_id: TEST_RESELLER.id, type: 'admin_topup', amount_usd: 50, created_at: new Date('2026-08-10T00:00:00Z') },
   { reseller_id: TEST_RESELLER.id, type: 'renewal_deduction', amount_usd: -30, created_at: new Date('2026-08-15T00:00:00Z') },
-  { reseller_id: TEST_RESELLER.id, type: 'payment_received', amount_usd: 20, created_at: new Date('2026-08-20T00:00:00Z') },
   // Before the period - must count toward "balance at period end" but not
   // toward the period's own credited/deducted totals.
   { reseller_id: TEST_RESELLER.id, type: 'initial_credit', amount_usd: 10, created_at: new Date('2026-07-01T00:00:00Z') },
@@ -59,12 +58,14 @@ const LEDGER_ENTRIES = [
   { reseller_id: OTHER_RESELLER_ID, type: 'renewal_deduction', amount_usd: -5, created_at: new Date('2026-08-08T00:00:00Z') },
 ];
 
+// Phase 4 corrected: invoices are period statements with no status/paid_at -
+// only sent_at matters for the billing section's "Invoices Issued" count.
 const INVOICES = [
-  { reseller_id: TEST_RESELLER.id, sent_at: new Date('2026-08-05T00:00:00Z'), paid_at: new Date('2026-08-25T00:00:00Z') },
-  { reseller_id: TEST_RESELLER.id, sent_at: new Date('2026-08-12T00:00:00Z'), paid_at: null },
-  // Before the period - must not count toward either issued or paid.
-  { reseller_id: TEST_RESELLER.id, sent_at: new Date('2026-07-01T00:00:00Z'), paid_at: new Date('2026-07-05T00:00:00Z') },
-  { reseller_id: OTHER_RESELLER_ID, sent_at: new Date('2026-08-06T00:00:00Z'), paid_at: null },
+  { reseller_id: TEST_RESELLER.id, sent_at: new Date('2026-08-05T00:00:00Z') },
+  { reseller_id: TEST_RESELLER.id, sent_at: new Date('2026-08-12T00:00:00Z') },
+  // Before the period - must not count toward the issued figure.
+  { reseller_id: TEST_RESELLER.id, sent_at: new Date('2026-07-01T00:00:00Z') },
+  { reseller_id: OTHER_RESELLER_ID, sent_at: new Date('2026-08-06T00:00:00Z') },
 ];
 
 function scopedRows(rows, scopeFilter) {
@@ -110,25 +111,14 @@ function wireBillingMocks() {
     return [...totals.entries()].map(([resellerId, balance]) => ({ reseller_id: resellerId, balance }));
   });
 
-  invoiceModel.getInvoiceEventCounts.mockImplementation(async (scopeFilter, start, end) => {
+  invoiceModel.countInvoicesSentInPeriod.mockImplementation(async (scopeFilter, start, end) => {
     const rows = scopedRows(INVOICES, scopeFilter);
-    return {
-      issued: rows.filter((inv) => inv.sent_at >= start && inv.sent_at < end).length,
-      paid: rows.filter((inv) => inv.paid_at && inv.paid_at >= start && inv.paid_at < end).length,
-    };
+    return rows.filter((inv) => inv.sent_at >= start && inv.sent_at < end).length;
   });
 
-  invoiceModel.getInvoiceIssuedCountsByReseller.mockImplementation(async (start, end) => {
+  invoiceModel.getInvoicesSentCountsByReseller.mockImplementation(async (start, end) => {
     const counts = new Map();
     INVOICES.filter((inv) => inv.sent_at >= start && inv.sent_at < end).forEach((inv) => {
-      counts.set(inv.reseller_id, (counts.get(inv.reseller_id) || 0) + 1);
-    });
-    return [...counts.entries()].map(([resellerId, count]) => ({ reseller_id: resellerId, count }));
-  });
-
-  invoiceModel.getInvoicePaidCountsByReseller.mockImplementation(async (start, end) => {
-    const counts = new Map();
-    INVOICES.filter((inv) => inv.paid_at && inv.paid_at >= start && inv.paid_at < end).forEach((inv) => {
       counts.set(inv.reseller_id, (counts.get(inv.reseller_id) || 0) + 1);
     });
     return [...counts.entries()].map(([resellerId, count]) => ({ reseller_id: resellerId, count }));
@@ -403,12 +393,11 @@ describe('Reports', () => {
       expect(res.status).toBe(200);
 
       const [, options] = spy.mock.calls[0];
-      expect(billingStat(options.sections, 'Wallet Balance (Period End)')).toBe('$150.00');
-      expect(billingStat(options.sections, 'Total Credited')).toBe('$170.00');
+      expect(billingStat(options.sections, 'Wallet Balance (Period End)')).toBe('$130.00');
+      expect(billingStat(options.sections, 'Total Credited')).toBe('$150.00');
       expect(billingStat(options.sections, 'Total Deducted')).toBe('$30.00');
       expect(billingStat(options.sections, 'Amount Owed')).toBe('$15.00');
       expect(billingStat(options.sections, 'Invoices Issued')).toBe(2);
-      expect(billingStat(options.sections, 'Invoices Paid')).toBe(1);
     });
 
     test("19. admin's platform-wide account report rolls up every reseller's figures for the period", async () => {
@@ -417,12 +406,11 @@ describe('Reports', () => {
       expect(res.status).toBe(200);
 
       const [, options] = spy.mock.calls[0];
-      expect(billingStat(options.sections, 'Wallet Balance (Period End)')).toBe('$145.00');
-      expect(billingStat(options.sections, 'Total Credited')).toBe('$170.00');
+      expect(billingStat(options.sections, 'Wallet Balance (Period End)')).toBe('$125.00');
+      expect(billingStat(options.sections, 'Total Credited')).toBe('$150.00');
       expect(billingStat(options.sections, 'Total Deducted')).toBe('$35.00');
       expect(billingStat(options.sections, 'Amount Owed')).toBe('$20.00');
       expect(billingStat(options.sections, 'Invoices Issued')).toBe(3);
-      expect(billingStat(options.sections, 'Invoices Paid')).toBe(1);
     });
 
     test('20. reseller report breaks billing figures out per reseller, plus a platform total row that matches the account report platform figures', async () => {
@@ -456,12 +444,11 @@ describe('Reports', () => {
       const rowFor = (label) => billing.rows.find((r) => r.reseller === label);
 
       expect(rowFor(TEST_RESELLER.username)).toMatchObject({
-        balance_period_end: '$150.00',
-        credited: '$170.00',
+        balance_period_end: '$130.00',
+        credited: '$150.00',
         deducted: '$30.00',
         owed: '$15.00',
         invoices_issued: 2,
-        invoices_paid: 1,
       });
 
       expect(rowFor('other_reseller')).toMatchObject({
@@ -470,16 +457,14 @@ describe('Reports', () => {
         deducted: '$5.00',
         owed: '$5.00',
         invoices_issued: 1,
-        invoices_paid: 0,
       });
 
       expect(rowFor('Platform Total')).toMatchObject({
-        balance_period_end: '$145.00',
-        credited: '$170.00',
+        balance_period_end: '$125.00',
+        credited: '$150.00',
         deducted: '$35.00',
         owed: '$20.00',
         invoices_issued: 3,
-        invoices_paid: 1,
       });
     });
   });

@@ -11,14 +11,15 @@ body:
   content: |-
     {
       "resellerId": 2,
-      "ledgerEntryIds": [5, 6]
+      "periodType": "monthly",
+      "periodValue": "2026-08"
     }
 description: |-
   ## Purpose
-  Creates a draft invoice from a specific set of a reseller's uninvoiced `renewal_deduction` ledger entries.
+  Generates an invoice for a reseller covering one billing period - every `renewal_deduction` ledger entry for that reseller within the period is summed into the total and linked to the invoice.
 
   ## Use Case
-  Called after the admin reviews `GET /api/resellers/:id/wallet/uninvoiced` and selects exactly what to bill this cycle.
+  Called by the admin at the end of a billing cycle (e.g. the 1st of the month, for the month that just closed) to produce that period's statement.
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
@@ -28,13 +29,17 @@ description: |-
   ## Request Requirements
   - **Required body fields:**
     - `resellerId` (number) - must reference an existing reseller.
-    - `ledgerEntryIds` (number[]) - non-empty; every id must be a `renewal_deduction` entry that belongs to `resellerId` and is not already invoiced.
+    - `periodType` (string) - `"monthly"` or `"annual"`.
+    - `periodValue` (string) - `"YYYY-MM"` for a monthly period, `"YYYY"` for an annual one. Same format/validation as the `?month=`/`?year=` params on the account/reseller reports.
 
   ## Responses
-  - **201 Created** - the new invoice: `{ "id": number, "reseller_id": number, "status": "draft", "total_amount_usd": number, "created_at": "...", "sent_at": null, "paid_at": null }`.
-  - **400 Bad Request** - `ledgerEntryIds` is missing/empty, `resellerId` doesn't reference an existing reseller, or any entry isn't an uninvoiced `renewal_deduction` belonging to that reseller (this also rejects re-billing an entry already linked to another invoice).
+  - **201 Created** - the new invoice: `{ "id": number, "reseller_id": number, "period_type": "monthly", "period_value": "2026-08", "total_amount_usd": number, "created_at": "...", "sent_at": null }`.
+  - **400 Bad Request** - `periodType`/`periodValue` is missing or malformed, or `resellerId` doesn't reference an existing reseller.
+  - **409 Conflict** - an invoice already exists for this exact `resellerId` + `periodType` + `periodValue`. The response body includes the existing invoice (`{ "error": "...", "invoice": {...} }`) so the caller can show its figures instead of erroring blindly. Regeneration is blocked outright, not recomputed or duplicated - see Notes.
   - **403 Forbidden** - caller is a reseller.
   - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
-  `total_amount_usd` is the positive sum of the selected entries' absolute deduction amounts. On success, every selected ledger row is stamped `invoiced = true` and linked via `invoice_id` - they can never be selected into a second invoice. Nothing is emailed yet; use `POST /api/invoices/:id/send` for that.
+  There is no status/payment state on an invoice (Phase 4, corrected) - it is a statement of what was owed for the period, not a payment tracker. Whether the reseller has paid is reflected only by whether admin has since credited their wallet via `POST /api/resellers/:id/wallet/topup`.
+
+  Every ledger entry this invoice claims is stamped `invoiced = true` and linked via `invoice_id`, so it can never be pulled into a second invoice - this is what lets an *overlapping* period (e.g. generating an annual invoice for a year that already has some monthly invoices in it) safely skip whatever was already billed instead of double-counting it. Regenerating the *exact same* reseller+period, however, is rejected outright (409) rather than silently recomputed - once a period's invoice exists, correcting it is a manual/administrative matter, not something this endpoint does automatically.

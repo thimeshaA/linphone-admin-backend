@@ -706,4 +706,78 @@ describe('Renewal wallet deduction (Phase 2)', () => {
     expect(mailer.sendMail).not.toHaveBeenCalled();
     expect(notificationModel.createNotification).not.toHaveBeenCalled();
   });
+
+  test('renewing when the owning reseller has no wallets row does not crash, and still records the ledger entry', async () => {
+    const noWalletReseller = await createReseller({
+      username: `deduct_nowallet_${Date.now()}`,
+      email: `deduct_nowallet_${Date.now()}@example.com`,
+    });
+    // Simulates a reseller predating the wallet feature (or otherwise missing
+    // its wallets row) - see sql/backfill-wallets.sql.
+    delete walletsByResellerId[noWalletReseller.id];
+
+    const noWalletAccount = await createAccount({
+      authid: `deduct_nowallet_account_${Date.now()}`,
+      resellerId: noWalletReseller.id,
+    });
+
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await adminAgent.patch(`/api/accounts/${noWalletAccount.id}/renew`).send({});
+    expect(res.status).toBe(200);
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`reseller ${noWalletReseller.id}`));
+    errorSpy.mockRestore();
+
+    // No wallets row means adjustWalletBalance is a no-op, but the ledger
+    // entry itself must still be recorded (orphaned until backfilled).
+    expect(walletsByResellerId[noWalletReseller.id]).toBeUndefined();
+    const entry = ledgerEntries.find(
+      (e) => e.reseller_id === noWalletReseller.id && e.related_account_id === noWalletAccount.id
+    );
+    expect(entry).toMatchObject({ type: 'renewal_deduction', amount_usd: -15 });
+  });
+
+  test('a missing renewal-cost setting skips the deduction entirely, loudly, instead of writing a $0 ledger entry', async () => {
+    settingsModel.getRenewalCost.mockResolvedValueOnce(null);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    walletModel.adjustWalletBalance.mockClear();
+    walletLedgerModel.createLedgerEntry.mockClear();
+    const ledgerCountBefore = ledgerEntries.length;
+    const balanceBefore = walletsByResellerId[reseller.id].balance_usd;
+
+    const res = await adminAgent.patch(`/api/accounts/${account.id}/renew`).send({});
+    expect(res.status).toBe(200); // the renewal itself still succeeds
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('renewal cost setting is missing'));
+    errorSpy.mockRestore();
+
+    expect(walletModel.adjustWalletBalance).not.toHaveBeenCalled();
+    expect(walletLedgerModel.createLedgerEntry).not.toHaveBeenCalled();
+    expect(ledgerEntries).toHaveLength(ledgerCountBefore);
+    expect(walletsByResellerId[reseller.id].balance_usd).toBe(balanceBefore);
+  });
+
+  test('an explicitly-configured $0 renewal cost still records a real deduction, but warns loudly', async () => {
+    settingsModel.getRenewalCost.mockResolvedValueOnce(0);
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await adminAgent.patch(`/api/accounts/${account.id}/renew`).send({});
+    expect(res.status).toBe(200);
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('renewal cost is configured at $0'));
+    warnSpy.mockRestore();
+
+    const entry = ledgerEntries.find(
+      (e) => e.reseller_id === reseller.id && e.related_account_id === account.id && e.amount_usd === 0
+    );
+    expect(entry).toBeDefined();
+  });
+
+  test('wallet balance after a real deduction equals the sum of that reseller\'s ledger entries', async () => {
+    const resellerLedger = ledgerEntries.filter((e) => e.reseller_id === reseller.id);
+    const expectedBalance = resellerLedger.reduce((sum, e) => sum + Number(e.amount_usd), 0);
+    expect(walletsByResellerId[reseller.id].balance_usd).toBe(expectedBalance);
+  });
 });

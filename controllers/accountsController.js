@@ -276,6 +276,12 @@ async function notifyRenewalDeduction({ account, reseller, amountUsd, balanceUsd
 // wallet to deduct from, so they're skipped entirely. Deduction always
 // proceeds regardless of the resulting balance - renewals are never blocked
 // for insufficient funds.
+//
+// The wallet is read *before* adjusting (not re-fetched after) so the
+// resulting balance can be computed in-process - a reseller somehow missing
+// its wallets row (e.g. one predating the wallet feature, not yet backfilled)
+// must not crash the renewal after the ledger entry has already been
+// written; it's logged instead so it surfaces as an operational data issue.
 async function applyRenewalDeduction(account, actingAdminId) {
   if (!account.creator_id) {
     return;
@@ -287,7 +293,34 @@ async function applyRenewalDeduction(account, actingAdminId) {
   }
 
   const renewalCost = await getRenewalCost();
+  // null (missing settings row) or anything that isn't a valid non-negative
+  // number is a misconfiguration, not a legitimate "free renewal" - writing
+  // a $0 ledger entry in that case would look like a real transaction that
+  // just happened to cost nothing, masking the actual problem. A genuinely
+  // configured 0 (updateRenewalCostSetting accepts it) is not an error, but
+  // is unusual enough to warn about loudly rather than deduct silently.
+  if (renewalCost === null || typeof renewalCost !== 'number' || !Number.isFinite(renewalCost) || renewalCost < 0) {
+    console.error(
+      `Renewal deduction skipped for reseller ${reseller.id} (account ${account.id}): renewal cost setting is ${
+        renewalCost === null ? 'missing' : `invalid (${renewalCost})`
+      } - no wallet_ledger entry was written. Configure it via PUT /api/settings/renewal-cost.`
+    );
+    return;
+  }
+  if (renewalCost === 0) {
+    console.warn(
+      `Renewal deduction for reseller ${reseller.id} (account ${account.id}): renewal cost is configured at $0 - recording a zero-amount deduction. If unintentional, set a real value via PUT /api/settings/renewal-cost.`
+    );
+  }
+
   const amountUsd = -renewalCost;
+
+  const walletBefore = await getWalletByResellerId(reseller.id, {});
+  if (!walletBefore) {
+    console.error(
+      `Renewal deduction for reseller ${reseller.id}: no wallets row exists - the deduction is still being recorded in wallet_ledger, but the balance won't reflect it until the wallet is backfilled (see sql/backfill-wallets.sql).`
+    );
+  }
 
   await adjustWalletBalance(reseller.id, amountUsd);
   await createLedgerEntry({
@@ -299,12 +332,12 @@ async function applyRenewalDeduction(account, actingAdminId) {
     note: null,
   });
 
-  const wallet = await getWalletByResellerId(reseller.id, {});
+  const balanceUsd = (walletBefore ? Number(walletBefore.balance_usd) : 0) + amountUsd;
   await notifyRenewalDeduction({
     account,
     reseller,
     amountUsd: renewalCost,
-    balanceUsd: wallet.balance_usd,
+    balanceUsd,
   });
 }
 

@@ -31,21 +31,22 @@ async function listLedgerForReseller(resellerId, { page, limit }) {
   return { rows, total: countRows[0].total };
 }
 
-// Backs GET /api/resellers/:id/wallet/uninvoiced - what's billable right now
-// for this reseller, so the admin can choose what to include in a new invoice.
-async function listUninvoicedRenewalDeductions(resellerId) {
+// Backs invoice generation (POST /api/invoices): every renewal_deduction for
+// this reseller within the exact period, not yet claimed by another invoice.
+// The `invoiced = 0` filter is what makes overlapping-but-different periods
+// (e.g. a monthly invoice already cut, then an annual one for the same year)
+// never double-count the same entry - each entry can only ever belong to one
+// invoice. It does NOT protect against re-running the *same* period twice;
+// that's guarded separately at the invoice level (see
+// invoiceModel.findInvoiceByResellerAndPeriod) so a no-op regeneration can't
+// create an empty duplicate once everything in the period is already claimed.
+async function getUninvoicedRenewalDeductionsInPeriod(resellerId, periodStart, periodEnd) {
   const [rows] = await adminPool.query(
-    `SELECT ${LEDGER_COLUMNS} FROM wallet_ledger WHERE reseller_id = ? AND type = 'renewal_deduction' AND invoiced = 0 ORDER BY created_at ASC`,
-    [resellerId]
-  );
-  return rows;
-}
-
-async function getLedgerEntriesByIds(ids) {
-  if (!ids.length) return [];
-  const [rows] = await adminPool.query(
-    `SELECT ${LEDGER_COLUMNS} FROM wallet_ledger WHERE id IN (${ids.map(() => '?').join(',')})`,
-    ids
+    `SELECT ${LEDGER_COLUMNS} FROM wallet_ledger
+     WHERE reseller_id = ? AND type = 'renewal_deduction' AND invoiced = 0
+       AND created_at >= ? AND created_at < ?
+     ORDER BY created_at ASC`,
+    [resellerId, periodStart, periodEnd]
   );
   return rows;
 }
@@ -64,18 +65,6 @@ async function getLedgerEntriesForInvoice(invoiceId) {
     [invoiceId]
   );
   return rows;
-}
-
-// Source of truth for full-vs-partial payment status: summed live from every
-// payment_received entry linked to this invoice, rather than a separate
-// "amount paid" counter on the invoices row, so a payment made twice can never
-// drift out of sync with the ledger.
-async function sumPaymentsForInvoice(invoiceId) {
-  const [rows] = await adminPool.query(
-    "SELECT COALESCE(SUM(amount_usd), 0) AS total FROM wallet_ledger WHERE invoice_id = ? AND type = 'payment_received'",
-    [invoiceId]
-  );
-  return rows[0].total;
 }
 
 // Billing section of the account/reseller reports (Phase 5) - period-scoped
@@ -126,11 +115,9 @@ async function getBalancesAsOfByReseller(asOf) {
 module.exports = {
   createLedgerEntry,
   listLedgerForReseller,
-  listUninvoicedRenewalDeductions,
-  getLedgerEntriesByIds,
+  getUninvoicedRenewalDeductionsInPeriod,
   linkLedgerEntriesToInvoice,
   getLedgerEntriesForInvoice,
-  sumPaymentsForInvoice,
   getLedgerTotalsByType,
   getLedgerTotalsByTypeAndReseller,
   getBalanceAsOf,

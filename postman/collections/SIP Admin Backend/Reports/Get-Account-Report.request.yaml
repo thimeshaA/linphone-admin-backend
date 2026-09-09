@@ -37,11 +37,13 @@ description: |-
   - **200 OK** - `application/pdf` binary body (landscape A4), `Content-Disposition: attachment; filename="account-report-<period>.pdf"`.
     - Detail table columns: `id`, `authid`, `domain`, `email`, `status`, `created_at`, `expires_at`, `disabled_at`, `expired_at`, `renewed_at`, and (admin only) `created_by`.
     - Rows are filtered on `created_at` falling within the requested period - this is a "created in period" report, not a snapshot of accounts still active during the period.
-    - A **Billing** section (Phase 5): Wallet Balance (Period End), Total Credited, Total Deducted, Amount Owed, Invoices Issued, Invoices Paid. Resellers see only their own wallet's figures; admins see the platform-wide roll-up across every reseller.
+    - A **Billing** section (Phase 5): Wallet Balance (Period End), Total Credited, Total Deducted, Amount Owed, Invoices Issued. Resellers see only their own wallet's figures; admins see the platform-wide roll-up across every reseller.
   - **400 Bad Request** - `period` missing/invalid, or the matching `month`/`year` param is missing or malformed.
   - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
   `password` is never selected or rendered - every column is pulled from a fixed non-sensitive column list, not `SELECT *`.
 
-  The Billing section's figures are pulled directly from `wallet_ledger`/`invoices` for this report's period, not re-derived from any other computed value. "Wallet Balance (Period End)", "Total Credited" and "Total Deducted" are period-scoped (`created_at`/`sent_at`/`paid_at` within `[start, end)`), except "Wallet Balance (Period End)" itself, which is the *cumulative* balance up to the period's end (every ledger entry ever created before it), not just entries within the period. "Amount Owed" is deliberately a *live* figure (the reseller's/platform's current wallet balance right now), not a period snapshot - same `balance < 0` logic `GET /api/resellers/:id/wallet`'s `owedAccounts` already derives from.
+  The Billing section's figures are pulled directly from `wallet_ledger`/`invoices` for this report's period, not re-derived from any other computed value. "Wallet Balance (Period End)", "Total Credited", "Total Deducted" and "Invoices Issued" are period-scoped (`created_at`/`sent_at` within `[start, end)`), except "Wallet Balance (Period End)" itself, which is the *cumulative* balance up to the period's end (every ledger entry ever created before it), not just entries within the period. "Amount Owed" is deliberately a *live* figure (the reseller's/platform's current wallet balance right now), not a period snapshot - same `balance < 0` logic `GET /api/resellers/:id/wallet`'s `owedAccounts` already derives from.
+
+  "Total Credited" sums `initial_credit` + `admin_topup` only (Phase 4, corrected: top-up is the only credit mechanism - there's no separate payment-tracking ledger type). Invoices themselves carry no payment status, so "Invoices Issued" counts how many were sent in the period - there's no corresponding "Invoices Paid" figure.

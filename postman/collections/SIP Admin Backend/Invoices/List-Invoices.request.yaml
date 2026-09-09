@@ -2,37 +2,31 @@ $kind: http-request
 name: List Invoices
 method: GET
 url: '{{baseUrl}}/api/invoices'
-order: 1004
+order: 1003
 params:
   - key: resellerId
     value: '2'
     disabled: true
     description: 'Admin-only filter: only invoices for this reseller'
-  - key: status
-    value: draft
-    disabled: true
-    description: 'Filter by status: draft | sent | partially_paid | paid'
 description: |-
   ## Purpose
-  Lists invoices - every invoice for admins, only the caller's own for resellers.
+  Lists invoices - every invoice for admins, only the caller's own **sent** invoices for resellers.
 
   ## Use Case
-  Powers the admin's billing dashboard and the reseller's own "my invoices" view.
+  Powers the admin's billing dashboard (which needs to see unsent/in-progress invoices too) and the reseller's own "my invoices" view (which should only ever show them a finished statement, never a draft-in-progress one).
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
-  - **Admins** see every invoice, optionally filtered by `resellerId`/`status`.
-  - **Resellers** only ever see their own invoices - same ownership-scoping pattern as `/api/accounts` and `/api/resellers/:id/wallet`.
+  - **Admins** see every invoice, sent or not, optionally filtered by `resellerId`.
+  - **Resellers** only ever see their own invoices, and only ones with `sent_at` set - an unsent invoice never appears in their list at all, same as it can't be fetched as a PDF (see `GET /api/invoices/:id/pdf`).
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **Optional query params:**
-    - `?resellerId=` - admin-only filter to one reseller's invoices.
-    - `?status=` - filter to one of `draft` | `sent` | `partially_paid` | `paid`.
+  - **Optional query param:** `?resellerId=` - admin-only filter to one reseller's invoices.
 
   ## Responses
-  - **200 OK** - an array of invoices: `[ { "id": number, "reseller_id": number, "status": "...", "total_amount_usd": number, "created_at": "...", "sent_at": "...|null", "paid_at": "...|null" } ]`.
+  - **200 OK** - an array of invoices: `[ { "id": number, "reseller_id": number, "period_type": "monthly", "period_value": "2026-08", "total_amount_usd": number, "created_at": "...", "sent_at": "...|null" } ]`.
   - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
-  Unlike `GET /api/invoices/:id/pdf` (which hides a draft's PDF from the reseller), this list endpoint is scoped by ownership only, not status - a reseller's own `draft` invoices still appear here, they just can't be downloaded as a PDF yet.
+  Unlike admins, a reseller's view is filtered by *both* ownership and `sent_at IS NOT NULL` - an invoice being generated is purely an admin-side action, and a reseller shouldn't be aware one exists until it's actually been sent to them.

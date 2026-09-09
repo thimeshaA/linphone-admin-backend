@@ -222,6 +222,25 @@ describe('Wallet / billing (Phase 1)', () => {
       expect(res.status).toBe(404);
     });
 
+    test('topping up a reseller with no wallets row returns 404 instead of crashing', async () => {
+      const noWalletReseller = await createReseller(adminAgent, {
+        username: `wallet_missing_${Date.now()}`,
+        password: resellerPassword,
+        email: `wallet_missing_${Date.now()}@example.com`,
+      });
+      // Simulates a reseller predating the wallet feature (or otherwise
+      // missing its wallets row) - see sql/backfill-wallets.sql.
+      delete walletsByResellerId[noWalletReseller.id];
+      walletModel.adjustWalletBalance.mockClear();
+
+      const res = await adminAgent
+        .post(`/api/resellers/${noWalletReseller.id}/wallet/topup`)
+        .send({ amount: 10 });
+
+      expect(res.status).toBe(404);
+      expect(walletModel.adjustWalletBalance).not.toHaveBeenCalled();
+    });
+
     test('as a reseller, top-up is forbidden', async () => {
       const resellerAgent = request.agent(app);
       await resellerAgent

@@ -40,4 +40,6 @@ description: |-
   - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
-  The ledger entry's `created_by` is set to the acting admin's id. `amount_usd` is stored positive for top-ups (deductions are logged as negative amounts in a later phase).
+  The ledger entry's `created_by` is set to the acting admin's id. `amount_usd` is stored positive for top-ups (deductions are logged as negative `renewal_deduction` amounts).
+
+  This is the *only* way a wallet balance increases (Phase 4, corrected) - a reseller paying an invoice outside the system is recorded the same way, as a top-up. Use `note` to record context (e.g. `"payment for August invoice"`) if useful; there is no separate payment-recording endpoint or ledger type.

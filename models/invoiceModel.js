@@ -1,6 +1,6 @@
 const { adminPool } = require('../config/db');
 
-const INVOICE_COLUMNS = 'id, reseller_id, status, total_amount_usd, created_at, sent_at, paid_at';
+const INVOICE_COLUMNS = 'id, reseller_id, period_type, period_value, total_amount_usd, created_at, sent_at';
 
 // Mirrors walletModel.buildScopedWhereClause: req.scopeFilter is keyed on
 // `creator_id` even though the column being scoped here is `reseller_id` -
@@ -13,10 +13,22 @@ function buildScopedWhereClause(scopeFilter) {
   return { condition: '1=1', params: [] };
 }
 
-async function createInvoice({ resellerId, totalAmountUsd }) {
+// Regeneration guard: an invoice is one document per reseller per exact
+// period (see the UNIQUE KEY in sql/invoices.sql). The controller checks this
+// before inserting so a duplicate attempt gets a clean 409 with the existing
+// invoice's figures, instead of a raw DB constraint-violation error.
+async function findInvoiceByResellerAndPeriod(resellerId, periodType, periodValue) {
+  const [rows] = await adminPool.query(
+    `SELECT ${INVOICE_COLUMNS} FROM invoices WHERE reseller_id = ? AND period_type = ? AND period_value = ? LIMIT 1`,
+    [resellerId, periodType, periodValue]
+  );
+  return rows[0] || null;
+}
+
+async function createInvoice({ resellerId, periodType, periodValue, totalAmountUsd }) {
   const [result] = await adminPool.query(
-    "INSERT INTO invoices (reseller_id, status, total_amount_usd) VALUES (?, 'draft', ?)",
-    [resellerId, totalAmountUsd]
+    'INSERT INTO invoices (reseller_id, period_type, period_value, total_amount_usd) VALUES (?, ?, ?, ?)',
+    [resellerId, periodType, periodValue, totalAmountUsd]
   );
 
   const [rows] = await adminPool.query(`SELECT ${INVOICE_COLUMNS} FROM invoices WHERE id = ?`, [
@@ -34,7 +46,10 @@ async function getInvoiceById(id, scopeFilter) {
   return rows[0] || null;
 }
 
-async function listInvoices(scopeFilter, { resellerId, status } = {}) {
+// sentOnly restricts to invoices with sent_at set - used for the reseller's
+// own view of GET /api/invoices, where an unsent invoice shouldn't appear at
+// all (admins always get sentOnly: false).
+async function listInvoices(scopeFilter, { resellerId, sentOnly } = {}) {
   const { condition, params } = buildScopedWhereClause(scopeFilter);
   let sql = `SELECT ${INVOICE_COLUMNS} FROM invoices WHERE ${condition}`;
   const queryParams = [...params];
@@ -44,9 +59,8 @@ async function listInvoices(scopeFilter, { resellerId, status } = {}) {
     queryParams.push(resellerId);
   }
 
-  if (status) {
-    sql += ' AND status = ?';
-    queryParams.push(status);
+  if (sentOnly) {
+    sql += ' AND sent_at IS NOT NULL';
   }
 
   sql += ' ORDER BY created_at DESC';
@@ -56,34 +70,25 @@ async function listInvoices(scopeFilter, { resellerId, status } = {}) {
 }
 
 async function markInvoiceSent(id) {
-  await adminPool.query("UPDATE invoices SET status = 'sent', sent_at = NOW() WHERE id = ?", [id]);
-}
-
-async function updateInvoiceStatus(id, status) {
-  const paidClause = status === 'paid' ? ', paid_at = NOW()' : '';
-  await adminPool.query(`UPDATE invoices SET status = ?${paidClause} WHERE id = ?`, [status, id]);
+  await adminPool.query('UPDATE invoices SET sent_at = NOW() WHERE id = ?', [id]);
 }
 
 // Billing section of the account/reseller reports (Phase 5) - how many
-// invoices were issued (sent_at) and how many were paid off (paid_at) within
-// the report's period. Scoped per-reseller (report's own scopeFilter) or
-// platform-wide ({}).
-async function getInvoiceEventCounts(scopeFilter, periodStart, periodEnd) {
+// invoices were sent within the report's period. Scoped per-reseller
+// (report's own scopeFilter) or platform-wide ({}).
+async function countInvoicesSentInPeriod(scopeFilter, periodStart, periodEnd) {
   const { condition, params } = buildScopedWhereClause(scopeFilter);
-  const [issuedRows] = await adminPool.query(
+  const [rows] = await adminPool.query(
     `SELECT COUNT(*) AS count FROM invoices WHERE ${condition} AND sent_at >= ? AND sent_at < ?`,
     [...params, periodStart, periodEnd]
   );
-  const [paidRows] = await adminPool.query(
-    `SELECT COUNT(*) AS count FROM invoices WHERE ${condition} AND paid_at >= ? AND paid_at < ?`,
-    [...params, periodStart, periodEnd]
-  );
-  return { issued: issuedRows[0].count, paid: paidRows[0].count };
+  return rows[0].count;
 }
 
-// Same as getInvoiceEventCounts but broken out per reseller, for the reseller
-// report's per-reseller billing breakdown table (admin-only, always platform-wide).
-async function getInvoiceIssuedCountsByReseller(periodStart, periodEnd) {
+// Same as countInvoicesSentInPeriod but broken out per reseller, for the
+// reseller report's per-reseller billing breakdown table (admin-only, always
+// platform-wide).
+async function getInvoicesSentCountsByReseller(periodStart, periodEnd) {
   const [rows] = await adminPool.query(
     'SELECT reseller_id, COUNT(*) AS count FROM invoices WHERE sent_at >= ? AND sent_at < ? GROUP BY reseller_id',
     [periodStart, periodEnd]
@@ -91,22 +96,13 @@ async function getInvoiceIssuedCountsByReseller(periodStart, periodEnd) {
   return rows;
 }
 
-async function getInvoicePaidCountsByReseller(periodStart, periodEnd) {
-  const [rows] = await adminPool.query(
-    'SELECT reseller_id, COUNT(*) AS count FROM invoices WHERE paid_at >= ? AND paid_at < ? GROUP BY reseller_id',
-    [periodStart, periodEnd]
-  );
-  return rows;
-}
-
 module.exports = {
   buildScopedWhereClause,
+  findInvoiceByResellerAndPeriod,
   createInvoice,
   getInvoiceById,
   listInvoices,
   markInvoiceSent,
-  updateInvoiceStatus,
-  getInvoiceEventCounts,
-  getInvoiceIssuedCountsByReseller,
-  getInvoicePaidCountsByReseller,
+  countInvoicesSentInPeriod,
+  getInvoicesSentCountsByReseller,
 };

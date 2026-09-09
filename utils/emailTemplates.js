@@ -280,19 +280,21 @@ function renderRenewalDeductionHtml({ authid, domain, resellerUsername, amountUs
   });
 }
 
-function renderInvoiceIssuedHtml({ resellerUsername, invoiceId, totalAmountUsd }) {
-  const rowsHtml = [detailRow('Invoice', `#${invoiceId}`), detailRow('Amount due', formatUsd(totalAmountUsd))].join(
-    ''
-  );
+function renderInvoiceIssuedHtml({ resellerUsername, invoiceId, periodLabel, totalAmountUsd }) {
+  const rowsHtml = [
+    detailRow('Invoice', `#${invoiceId}`),
+    detailRow('Period', periodLabel),
+    detailRow('Total owed', formatUsd(totalAmountUsd)),
+  ].join('');
 
   return renderEmailShell({
     module: undefined,
-    preheader: `Invoice #${invoiceId} - ${formatUsd(totalAmountUsd)} due`,
+    preheader: `Invoice for ${periodLabel} - ${formatUsd(totalAmountUsd)} owed`,
     eyebrow: 'Billing · Invoice',
-    title: `Invoice #${invoiceId}`,
+    title: `Invoice for ${periodLabel}`,
     intro: [
       `Hi ${escapeHtml(resellerUsername)},`,
-      `Your invoice is attached as a PDF. Payment is recorded manually by our team once received - no online payment is required or accepted through this email.`,
+      `Your invoice for ${escapeHtml(periodLabel)} is attached as a PDF, covering the renewals charged to your wallet during that period. Payments are handled by our team crediting your wallet directly - there's no online payment link in this email.`,
     ],
     rowsHtml,
     footerNote: 'Automated notification from Admin Control.',

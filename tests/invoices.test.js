@@ -88,33 +88,18 @@ function wireMocks() {
     return true;
   });
 
-  walletLedgerModel.createLedgerEntry.mockImplementation(
-    async ({ resellerId, type, amountUsd, relatedAccountId, invoiceId, createdBy, note }) => {
-      const entry = {
-        id: nextLedgerId++,
-        reseller_id: Number(resellerId),
-        type,
-        amount_usd: amountUsd,
-        related_account_id: relatedAccountId ?? null,
-        invoiced: 0,
-        invoice_id: invoiceId ?? null,
-        created_by: createdBy ?? null,
-        note: note ?? null,
-        created_at: new Date(),
-      };
-      ledgerEntries.push(entry);
-      return { ...entry };
-    }
-  );
-
-  walletLedgerModel.listUninvoicedRenewalDeductions.mockImplementation(async (resellerId) =>
-    ledgerEntries
-      .filter((e) => e.reseller_id === Number(resellerId) && e.type === 'renewal_deduction' && !e.invoiced)
-      .map((e) => ({ ...e }))
-  );
-
-  walletLedgerModel.getLedgerEntriesByIds.mockImplementation(async (ids) =>
-    ledgerEntries.filter((e) => ids.includes(e.id)).map((e) => ({ ...e }))
+  walletLedgerModel.getUninvoicedRenewalDeductionsInPeriod.mockImplementation(
+    async (resellerId, periodStart, periodEnd) =>
+      ledgerEntries
+        .filter(
+          (e) =>
+            e.reseller_id === Number(resellerId) &&
+            e.type === 'renewal_deduction' &&
+            !e.invoiced &&
+            e.created_at >= periodStart &&
+            e.created_at < periodEnd
+        )
+        .map((e) => ({ ...e }))
   );
 
   walletLedgerModel.linkLedgerEntriesToInvoice.mockImplementation(async (ids, invoiceId) => {
@@ -132,22 +117,26 @@ function wireMocks() {
       .map((e) => ({ ...e }))
   );
 
-  walletLedgerModel.sumPaymentsForInvoice.mockImplementation(async (invoiceId) =>
-    ledgerEntries
-      .filter((e) => e.invoice_id === invoiceId && e.type === 'payment_received')
-      .reduce((sum, e) => sum + Number(e.amount_usd), 0)
-  );
+  invoiceModel.findInvoiceByResellerAndPeriod.mockImplementation(async (resellerId, periodType, periodValue) => {
+    const invoice = Object.values(invoicesById).find(
+      (inv) =>
+        Number(inv.reseller_id) === Number(resellerId) &&
+        inv.period_type === periodType &&
+        inv.period_value === periodValue
+    );
+    return invoice ? { ...invoice } : null;
+  });
 
-  invoiceModel.createInvoice.mockImplementation(async ({ resellerId, totalAmountUsd }) => {
+  invoiceModel.createInvoice.mockImplementation(async ({ resellerId, periodType, periodValue, totalAmountUsd }) => {
     const id = nextInvoiceId++;
     const invoice = {
       id,
       reseller_id: Number(resellerId),
-      status: 'draft',
+      period_type: periodType,
+      period_value: periodValue,
       total_amount_usd: totalAmountUsd,
       created_at: new Date(),
       sent_at: null,
-      paid_at: null,
     };
     invoicesById[id] = invoice;
     return { ...invoice };
@@ -166,29 +155,20 @@ function wireMocks() {
     return { ...invoice };
   });
 
-  invoiceModel.listInvoices.mockImplementation(async (scopeFilter, { resellerId, status } = {}) => {
+  invoiceModel.listInvoices.mockImplementation(async (scopeFilter, { resellerId, sentOnly } = {}) => {
     let rows = Object.values(invoicesById);
     if (scopeFilter && scopeFilter.creator_id !== undefined) {
       rows = rows.filter((r) => Number(r.reseller_id) === Number(scopeFilter.creator_id));
     }
     if (resellerId) rows = rows.filter((r) => Number(r.reseller_id) === Number(resellerId));
-    if (status) rows = rows.filter((r) => r.status === status);
+    if (sentOnly) rows = rows.filter((r) => r.sent_at !== null);
     return rows.map((r) => ({ ...r })).sort((a, b) => b.id - a.id);
   });
 
   invoiceModel.markInvoiceSent.mockImplementation(async (id) => {
     const invoice = invoicesById[id];
     if (invoice) {
-      invoice.status = 'sent';
       invoice.sent_at = new Date();
-    }
-  });
-
-  invoiceModel.updateInvoiceStatus.mockImplementation(async (id, status) => {
-    const invoice = invoicesById[id];
-    if (invoice) {
-      invoice.status = status;
-      if (status === 'paid') invoice.paid_at = new Date();
     }
   });
 
@@ -221,22 +201,31 @@ async function loginAs(username, password) {
   return agent;
 }
 
-async function seedRenewalDeduction(resellerId, amountUsd, relatedAccountId) {
-  return walletLedgerModel.createLedgerEntry({
-    resellerId,
+// Bypasses the createLedgerEntry model entirely (it always stamps
+// created_at = NOW() in the real DB) so tests can place a deduction into a
+// specific period, exactly what generating an invoice needs to filter on.
+function seedRenewalDeduction(resellerId, amountUsd, relatedAccountId, createdAt) {
+  const entry = {
+    id: nextLedgerId++,
+    reseller_id: Number(resellerId),
     type: 'renewal_deduction',
-    amountUsd: -Math.abs(amountUsd),
-    relatedAccountId,
-    createdBy: TEST_ADMIN.id,
+    amount_usd: -Math.abs(amountUsd),
+    related_account_id: relatedAccountId,
+    invoiced: 0,
+    invoice_id: null,
+    created_by: TEST_ADMIN.id,
     note: null,
-  });
+    created_at: createdAt,
+  };
+  ledgerEntries.push(entry);
+  return { ...entry };
 }
 
 function pdfBuffer(res) {
   return Buffer.isBuffer(res.body) ? res.body : Buffer.from(res.text || '', 'binary');
 }
 
-describe('Invoices (Phase 4)', () => {
+describe('Invoices (Phase 4, corrected)', () => {
   const adminAgent = request.agent(app);
   const resellerPassword = 'ResellerPass123!';
 
@@ -253,11 +242,13 @@ describe('Invoices (Phase 4)', () => {
     expect(res.status).toBe(200);
   });
 
-  describe('generating an invoice', () => {
+  describe('generating an invoice for a period', () => {
     let reseller;
-    let entryOne;
-    let entryTwo;
-    let entryThree;
+    let otherReseller;
+    let augEntryOne;
+    let augEntryTwo;
+    let julEntry;
+    let otherResellerAugEntry;
 
     beforeAll(async () => {
       reseller = await createReseller(adminAgent, {
@@ -265,55 +256,102 @@ describe('Invoices (Phase 4)', () => {
         password: resellerPassword,
         email: `inv_gen_${Date.now()}@example.com`,
       });
+      otherReseller = await createReseller(adminAgent, {
+        username: `inv_gen_other_${Date.now()}`,
+        password: resellerPassword,
+        email: `inv_gen_other_${Date.now()}@example.com`,
+      });
 
-      entryOne = await seedRenewalDeduction(reseller.id, 10, 1);
-      entryTwo = await seedRenewalDeduction(reseller.id, 15, 2);
-      entryThree = await seedRenewalDeduction(reseller.id, 20, 3);
+      augEntryOne = seedRenewalDeduction(reseller.id, 10, 1, new Date(2026, 7, 5));
+      augEntryTwo = seedRenewalDeduction(reseller.id, 15, 2, new Date(2026, 7, 20));
+      // Outside the August period entirely - must never be pulled into it.
+      julEntry = seedRenewalDeduction(reseller.id, 99, 3, new Date(2026, 6, 31));
+      // Belongs to a different reseller, same period - must never leak across resellers.
+      otherResellerAugEntry = seedRenewalDeduction(otherReseller.id, 50, 4, new Date(2026, 7, 10));
     });
 
-    test('uninvoiced endpoint lists exactly the billable entries for that reseller', async () => {
-      const res = await adminAgent.get(`/api/resellers/${reseller.id}/wallet/uninvoiced`);
-      expect(res.status).toBe(200);
-      expect(res.body.entries.map((e) => e.id).sort()).toEqual(
-        [entryOne.id, entryTwo.id, entryThree.id].sort()
-      );
-    });
-
-    test('creating an invoice with a subset of entries only includes those entries in the total', async () => {
+    test('sums only that reseller\'s deductions within the exact period', async () => {
       const res = await adminAgent
         .post('/api/invoices')
-        .send({ resellerId: reseller.id, ledgerEntryIds: [entryOne.id, entryTwo.id] });
+        .send({ resellerId: reseller.id, periodType: 'monthly', periodValue: '2026-08' });
 
       expect(res.status).toBe(201);
-      expect(res.body.status).toBe('draft');
-      expect(res.body.total_amount_usd).toBe(25);
+      expect(res.body.reseller_id).toBe(reseller.id);
+      expect(res.body.period_type).toBe('monthly');
+      expect(res.body.period_value).toBe('2026-08');
+      expect(res.body.total_amount_usd).toBe(25); // 10 + 15, not the July or other-reseller entries
+      expect(res.body.sent_at).toBeNull();
 
-      // entryThree was never selected, so it must still show up as uninvoiced.
-      const uninvoiced = await adminAgent.get(`/api/resellers/${reseller.id}/wallet/uninvoiced`);
-      expect(uninvoiced.body.entries.map((e) => e.id)).toEqual([entryThree.id]);
+      expect(ledgerEntries.find((e) => e.id === augEntryOne.id)).toMatchObject({ invoiced: 1, invoice_id: res.body.id });
+      expect(ledgerEntries.find((e) => e.id === augEntryTwo.id)).toMatchObject({ invoiced: 1, invoice_id: res.body.id });
+      expect(ledgerEntries.find((e) => e.id === julEntry.id)).toMatchObject({ invoiced: 0, invoice_id: null });
+      expect(ledgerEntries.find((e) => e.id === otherResellerAugEntry.id)).toMatchObject({
+        invoiced: 0,
+        invoice_id: null,
+      });
     });
 
-    test('an already-invoiced entry cannot be selected into a second invoice', async () => {
+    test('regenerating the exact same reseller+period is rejected with 409 and no duplicate is created', async () => {
+      const before = Object.keys(invoicesById).length;
+
       const res = await adminAgent
         .post('/api/invoices')
-        .send({ resellerId: reseller.id, ledgerEntryIds: [entryOne.id, entryThree.id] });
+        .send({ resellerId: reseller.id, periodType: 'monthly', periodValue: '2026-08' });
 
-      expect(res.status).toBe(400);
-      // entryThree must remain uninvoiced - the rejected request had no side effects.
-      const uninvoiced = await adminAgent.get(`/api/resellers/${reseller.id}/wallet/uninvoiced`);
-      expect(uninvoiced.body.entries.map((e) => e.id)).toEqual([entryThree.id]);
+      expect(res.status).toBe(409);
+      expect(res.body.invoice).toMatchObject({ reseller_id: reseller.id, total_amount_usd: 25 });
+      expect(Object.keys(invoicesById).length).toBe(before);
     });
 
-    test('ledgerEntryIds must be a non-empty array', async () => {
-      const res = await adminAgent.post('/api/invoices').send({ resellerId: reseller.id, ledgerEntryIds: [] });
+    test('an overlapping annual invoice only picks up entries not already claimed by the monthly one', async () => {
+      // A new deduction elsewhere in 2026, created after the monthly invoice
+      // above was already generated - still un-invoiced.
+      const marEntry = seedRenewalDeduction(reseller.id, 40, 5, new Date(2026, 2, 15));
+
+      const res = await adminAgent
+        .post('/api/invoices')
+        .send({ resellerId: reseller.id, periodType: 'annual', periodValue: '2026' });
+
+      expect(res.status).toBe(201);
+      // julEntry (99) and marEntry (40) are both still un-invoiced and fall
+      // within calendar year 2026, so both are swept in here (139 total) -
+      // but augEntryOne/Two (25 total) are already claimed by the monthly
+      // invoice and must not be double-counted.
+      expect(res.body.total_amount_usd).toBe(139);
+
+      expect(ledgerEntries.find((e) => e.id === marEntry.id)).toMatchObject({ invoiced: 1, invoice_id: res.body.id });
+      expect(ledgerEntries.find((e) => e.id === julEntry.id)).toMatchObject({ invoiced: 1, invoice_id: res.body.id });
+      expect(ledgerEntries.find((e) => e.id === augEntryOne.id).invoice_id).not.toBe(res.body.id);
+    });
+
+    test('a period with no deductions still generates a zero-total invoice', async () => {
+      const res = await adminAgent
+        .post('/api/invoices')
+        .send({ resellerId: reseller.id, periodType: 'monthly', periodValue: '2025-01' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.total_amount_usd).toBe(0);
+    });
+
+    test('an invalid period is rejected with 400', async () => {
+      const res = await adminAgent
+        .post('/api/invoices')
+        .send({ resellerId: reseller.id, periodType: 'monthly', periodValue: 'not-a-month' });
       expect(res.status).toBe(400);
     });
 
-    test('a reseller cannot create an invoice', async () => {
+    test('a non-existent reseller is rejected with 400', async () => {
+      const res = await adminAgent
+        .post('/api/invoices')
+        .send({ resellerId: 999999, periodType: 'monthly', periodValue: '2026-08' });
+      expect(res.status).toBe(400);
+    });
+
+    test('a reseller cannot generate an invoice', async () => {
       const agent = await loginAs(reseller.username, resellerPassword);
       const res = await agent
         .post('/api/invoices')
-        .send({ resellerId: reseller.id, ledgerEntryIds: [entryThree.id] });
+        .send({ resellerId: reseller.id, periodType: 'monthly', periodValue: '2026-09' });
       expect(res.status).toBe(403);
     });
   });
@@ -329,21 +367,21 @@ describe('Invoices (Phase 4)', () => {
         email: `inv_send_${Date.now()}@example.com`,
       });
 
-      const entry = await seedRenewalDeduction(reseller.id, 12, 5);
+      seedRenewalDeduction(reseller.id, 12, 5, new Date(2026, 7, 5));
       const createRes = await adminAgent
         .post('/api/invoices')
-        .send({ resellerId: reseller.id, ledgerEntryIds: [entry.id] });
+        .send({ resellerId: reseller.id, periodType: 'monthly', periodValue: '2026-08' });
       invoice = createRes.body;
     });
 
-    test('admin can fetch the PDF while the invoice is still a draft', async () => {
+    test('admin can fetch the PDF before it has been sent', async () => {
       const res = await adminAgent.get(`/api/invoices/${invoice.id}/pdf`);
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/^application\/pdf/);
       expect(pdfBuffer(res).slice(0, 4).toString()).toBe('%PDF');
     });
 
-    test('the owning reseller cannot fetch the PDF while still draft', async () => {
+    test('the owning reseller cannot fetch the PDF before it has been sent', async () => {
       const agent = await loginAs(reseller.username, resellerPassword);
       const res = await agent.get(`/api/invoices/${invoice.id}/pdf`);
       expect(res.status).toBe(404);
@@ -360,11 +398,16 @@ describe('Invoices (Phase 4)', () => {
       expect(res.status).toBe(404);
     });
 
-    test('sending emails the PDF as an attachment and marks the invoice sent', async () => {
+    test('sending emails the PDF as an attachment, sets sent_at, and never touches the wallet balance', async () => {
+      walletModel.adjustWalletBalance.mockClear();
+
       const res = await adminAgent.post(`/api/invoices/${invoice.id}/send`);
       expect(res.status).toBe(200);
-      expect(res.body.status).toBe('sent');
       expect(res.body.sent_at).not.toBeNull();
+
+      // Top-up remains the only credit mechanism (Phase 4 corrected) - sending
+      // an invoice is purely informational, it must never adjust the wallet.
+      expect(walletModel.adjustWalletBalance).not.toHaveBeenCalled();
 
       // Reseller creation above also sends a welcome email through the same
       // mocked sendMail, so pick out the invoice-send call specifically
@@ -403,67 +446,19 @@ describe('Invoices (Phase 4)', () => {
     });
   });
 
-  describe('recording payments', () => {
-    let reseller;
-    let invoice;
-
-    beforeAll(async () => {
-      reseller = await createReseller(adminAgent, {
-        username: `inv_pay_${Date.now()}`,
-        password: resellerPassword,
-        email: `inv_pay_${Date.now()}@example.com`,
-      });
-
-      const entry = await seedRenewalDeduction(reseller.id, 30, 9);
-      const createRes = await adminAgent
-        .post('/api/invoices')
-        .send({ resellerId: reseller.id, ledgerEntryIds: [entry.id] });
-      invoice = createRes.body; // total_amount_usd: 30
-    });
-
-    test('a partial payment moves status to partially_paid and credits the wallet', async () => {
-      const res = await adminAgent
-        .post(`/api/invoices/${invoice.id}/payment`)
-        .send({ amountPaid: 10, note: 'first installment' });
-
-      expect(res.status).toBe(200);
-      expect(res.body.status).toBe('partially_paid');
-      expect(res.body.paid_at).toBeNull();
-      expect(walletsByResellerId[reseller.id].balance_usd).toBe(10);
-
-      expect(notificationModel.createNotification).toHaveBeenCalledWith(
-        reseller.id,
-        'payment_recorded',
-        expect.any(String),
-        expect.any(String),
-        expect.objectContaining({ invoiceId: invoice.id, status: 'partially_paid' })
-      );
-    });
-
-    test('a second payment that reaches the total moves status to paid', async () => {
-      const res = await adminAgent.post(`/api/invoices/${invoice.id}/payment`).send({ amountPaid: 20 });
-
-      expect(res.status).toBe(200);
-      expect(res.body.status).toBe('paid');
-      expect(res.body.paid_at).not.toBeNull();
-      expect(walletsByResellerId[reseller.id].balance_usd).toBe(30);
-    });
-
-    test('amountPaid must be a positive number', async () => {
-      const res = await adminAgent.post(`/api/invoices/${invoice.id}/payment`).send({ amountPaid: 0 });
-      expect(res.status).toBe(400);
-    });
-
-    test('a reseller cannot record a payment', async () => {
-      const agent = await loginAs(reseller.username, resellerPassword);
-      const res = await agent.post(`/api/invoices/${invoice.id}/payment`).send({ amountPaid: 5 });
-      expect(res.status).toBe(403);
+  describe('no payment-tracking endpoint exists (Phase 4 corrected)', () => {
+    test('POST /api/invoices/:id/payment is not a route', async () => {
+      const res = await adminAgent.post('/api/invoices/1/payment').send({ amountPaid: 10 });
+      expect(res.status).toBe(404);
     });
   });
 
   describe('listing invoices', () => {
     let resellerA;
     let resellerB;
+    let sentInvoiceA;
+    let unsentInvoiceA;
+    let sentInvoiceB;
 
     beforeAll(async () => {
       resellerA = await createReseller(adminAgent, {
@@ -477,17 +472,33 @@ describe('Invoices (Phase 4)', () => {
         email: `inv_list_b_${Date.now()}@example.com`,
       });
 
-      const entryA = await seedRenewalDeduction(resellerA.id, 5, 11);
-      const entryB = await seedRenewalDeduction(resellerB.id, 7, 12);
-      await adminAgent.post('/api/invoices').send({ resellerId: resellerA.id, ledgerEntryIds: [entryA.id] });
-      await adminAgent.post('/api/invoices').send({ resellerId: resellerB.id, ledgerEntryIds: [entryB.id] });
+      seedRenewalDeduction(resellerA.id, 5, 11, new Date(2026, 0, 5));
+      seedRenewalDeduction(resellerA.id, 6, 12, new Date(2026, 1, 5));
+      seedRenewalDeduction(resellerB.id, 7, 13, new Date(2026, 0, 5));
+
+      const createA1 = await adminAgent
+        .post('/api/invoices')
+        .send({ resellerId: resellerA.id, periodType: 'monthly', periodValue: '2026-01' });
+      sentInvoiceA = createA1.body;
+      await adminAgent.post(`/api/invoices/${sentInvoiceA.id}/send`);
+
+      const createA2 = await adminAgent
+        .post('/api/invoices')
+        .send({ resellerId: resellerA.id, periodType: 'monthly', periodValue: '2026-02' });
+      unsentInvoiceA = createA2.body; // deliberately left unsent
+
+      const createB1 = await adminAgent
+        .post('/api/invoices')
+        .send({ resellerId: resellerB.id, periodType: 'monthly', periodValue: '2026-01' });
+      sentInvoiceB = createB1.body;
+      await adminAgent.post(`/api/invoices/${sentInvoiceB.id}/send`);
     });
 
-    test('admin sees invoices for every reseller', async () => {
+    test('admin sees every invoice, sent or not', async () => {
       const res = await adminAgent.get('/api/invoices');
       expect(res.status).toBe(200);
-      const sellerIds = res.body.map((inv) => inv.reseller_id);
-      expect(sellerIds).toEqual(expect.arrayContaining([resellerA.id, resellerB.id]));
+      const ids = res.body.map((inv) => inv.id);
+      expect(ids).toEqual(expect.arrayContaining([sentInvoiceA.id, unsentInvoiceA.id, sentInvoiceB.id]));
     });
 
     test('admin can filter by resellerId', async () => {
@@ -496,12 +507,15 @@ describe('Invoices (Phase 4)', () => {
       expect(res.body.every((inv) => inv.reseller_id === resellerA.id)).toBe(true);
     });
 
-    test("a reseller only sees their own invoices, never another reseller's", async () => {
+    test("a reseller sees only their own sent invoices - never another reseller's, and never an unsent one of their own", async () => {
       const agent = await loginAs(resellerA.username, resellerPassword);
       const res = await agent.get('/api/invoices');
       expect(res.status).toBe(200);
-      expect(res.body.every((inv) => inv.reseller_id === resellerA.id)).toBe(true);
-      expect(res.body.some((inv) => inv.reseller_id === resellerB.id)).toBe(false);
+
+      const ids = res.body.map((inv) => inv.id);
+      expect(ids).toEqual([sentInvoiceA.id]);
+      expect(ids).not.toContain(unsentInvoiceA.id);
+      expect(ids).not.toContain(sentInvoiceB.id);
     });
   });
 });

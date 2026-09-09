@@ -53,6 +53,11 @@ async function topup(req, res) {
     return res.status(404).json({ error: 'Reseller not found' });
   }
 
+  const wallet = await getWalletByResellerId(req.params.id, {});
+  if (!wallet) {
+    return res.status(404).json({ error: 'Wallet not found' });
+  }
+
   await adjustWalletBalance(req.params.id, amount);
   await createLedgerEntry({
     resellerId: req.params.id,
@@ -62,8 +67,7 @@ async function topup(req, res) {
     note: note || null,
   });
 
-  const wallet = await getWalletByResellerId(req.params.id, {});
-  return res.json({ resellerId: wallet.reseller_id, balanceUsd: wallet.balance_usd });
+  return res.json({ resellerId: wallet.reseller_id, balanceUsd: Number(wallet.balance_usd) + amount });
 }
 
 module.exports = { getWallet, topup };

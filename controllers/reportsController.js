@@ -7,11 +7,7 @@ const {
   getBalanceAsOf,
   getBalancesAsOfByReseller,
 } = require('../models/walletLedgerModel');
-const {
-  getInvoiceEventCounts,
-  getInvoiceIssuedCountsByReseller,
-  getInvoicePaidCountsByReseller,
-} = require('../models/invoiceModel');
+const { countInvoicesSentInPeriod, getInvoicesSentCountsByReseller } = require('../models/invoiceModel');
 const { parsePeriod } = require('../utils/reportPeriod');
 const pdfReport = require('../utils/pdfReport');
 
@@ -163,11 +159,13 @@ function formatUsd(amount) {
 
 // wallet_ledger.type -> the two report figures they roll up into. Deductions
 // are stored negative (see applyRenewalDeduction in accountsController), so
-// "total deducted" is the absolute value.
+// "total deducted" is the absolute value. Top-up is the only credit type
+// (Phase 4 corrected: payments and top-ups are the same admin action, and
+// there's no separate payment_received type any more).
 function summarizeLedgerTotals(rows) {
   const byType = Object.fromEntries(rows.map((r) => [r.type, Number(r.total)]));
   return {
-    credited: (byType.initial_credit || 0) + (byType.admin_topup || 0) + (byType.payment_received || 0),
+    credited: (byType.initial_credit || 0) + (byType.admin_topup || 0),
     deducted: Math.abs(byType.renewal_deduction || 0),
   };
 }
@@ -178,10 +176,10 @@ function summarizeLedgerTotals(rows) {
 // intentionally a *current*, not period-end, snapshot - same live balance
 // GET /api/resellers/:id/wallet already derives owedAccounts from.
 async function getBillingTotals(scopeFilter, resellerId, start, end) {
-  const [ledgerRows, balanceAtEnd, invoiceCounts] = await Promise.all([
+  const [ledgerRows, balanceAtEnd, invoicesIssued] = await Promise.all([
     getLedgerTotalsByType(scopeFilter, start, end),
     getBalanceAsOf(scopeFilter, end),
-    getInvoiceEventCounts(scopeFilter, start, end),
+    countInvoicesSentInPeriod(scopeFilter, start, end),
   ]);
 
   const { credited, deducted } = summarizeLedgerTotals(ledgerRows);
@@ -200,8 +198,7 @@ async function getBillingTotals(scopeFilter, resellerId, start, end) {
     credited,
     deducted,
     owed,
-    invoicesIssued: Number(invoiceCounts.issued),
-    invoicesPaid: Number(invoiceCounts.paid),
+    invoicesIssued: Number(invoicesIssued),
   };
 }
 
@@ -215,7 +212,6 @@ function billingKpiSection(totals) {
       { label: 'Total Deducted', value: formatUsd(totals.deducted) },
       { label: 'Amount Owed', value: formatUsd(totals.owed) },
       { label: 'Invoices Issued', value: totals.invoicesIssued },
-      { label: 'Invoices Paid', value: totals.invoicesPaid },
     ],
   };
 }
@@ -227,7 +223,6 @@ const BILLING_TABLE_COLUMNS = [
   { key: 'deducted', label: 'Deducted', width: 90, align: 'right' },
   { key: 'owed', label: 'Owed', width: 80, align: 'right' },
   { key: 'invoices_issued', label: 'Invoices Issued', width: 100, align: 'right' },
-  { key: 'invoices_paid', label: 'Invoices Paid', width: 100, align: 'right' },
 ];
 
 function billingRow(label, totals) {
@@ -238,7 +233,6 @@ function billingRow(label, totals) {
     deducted: formatUsd(totals.deducted),
     owed: formatUsd(totals.owed),
     invoices_issued: totals.invoicesIssued,
-    invoices_paid: totals.invoicesPaid,
   };
 }
 
@@ -249,12 +243,11 @@ function billingRow(label, totals) {
 // platform-wide KPIs use, rather than re-summing the per-reseller rows, so
 // the two reports can never disagree about the platform total.
 async function buildBillingTableSection(resellers, start, end) {
-  const [ledgerByReseller, balancesByReseller, issuedByReseller, paidByReseller, currentBalances, platformTotals] =
+  const [ledgerByReseller, balancesByReseller, issuedByReseller, currentBalances, platformTotals] =
     await Promise.all([
       getLedgerTotalsByTypeAndReseller(start, end),
       getBalancesAsOfByReseller(end),
-      getInvoiceIssuedCountsByReseller(start, end),
-      getInvoicePaidCountsByReseller(start, end),
+      getInvoicesSentCountsByReseller(start, end),
       listAllWalletBalances(),
       getBillingTotals({}, null, start, end),
     ]);
@@ -266,7 +259,6 @@ async function buildBillingTableSection(resellers, start, end) {
   }
   const balanceAtEndMap = new Map(balancesByReseller.map((r) => [r.reseller_id, Number(r.balance)]));
   const issuedMap = new Map(issuedByReseller.map((r) => [r.reseller_id, Number(r.count)]));
-  const paidMap = new Map(paidByReseller.map((r) => [r.reseller_id, Number(r.count)]));
   const currentBalanceMap = new Map(currentBalances.map((w) => [w.reseller_id, Number(w.balance_usd)]));
 
   const rows = resellers.map((r) => {
@@ -278,7 +270,6 @@ async function buildBillingTableSection(resellers, start, end) {
       deducted,
       owed: currentBalance < 0 ? Math.abs(currentBalance) : 0,
       invoicesIssued: issuedMap.get(r.id) || 0,
-      invoicesPaid: paidMap.get(r.id) || 0,
     };
     return billingRow(r.username, totals);
   });
