@@ -1,0 +1,38 @@
+$kind: http-request
+name: Update Renewal Cost
+method: PUT
+url: '{{baseUrl}}/api/settings/renewal-cost'
+order: 1001
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "renewalCost": 5
+    }
+description: |-
+  ## Purpose
+  Sets the per-renewal cost (USD) used to derive a reseller's owed-accounts count from their wallet balance.
+
+  ## Use Case
+  Called by the admin when the per-account renewal price changes.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admin-only** - resellers receive **403 Forbidden**.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **Required body field:**
+    - `renewalCost` (number) - must be a non-negative number.
+
+  ## Responses
+  - **200 OK** - `{ "renewalCost": number }` reflecting the new value.
+  - **400 Bad Request** - `renewalCost` is missing, not a number, or negative.
+  - **403 Forbidden** - caller is a reseller.
+  - **401 Unauthorized** - missing or invalid auth token.
+
+  ## Notes
+  This value is not versioned - changing it only affects owed-accounts calculations made after the change; it does not retroactively recompute past wallet ledger entries.

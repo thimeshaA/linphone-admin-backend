@@ -19,6 +19,11 @@ const adminPool = mysql.createPool({
   database: process.env.ADMIN_DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
+  // wallets/wallet_ledger/settings store DECIMAL columns (balance_usd,
+  // amount_usd, renewal_cost_usd) - without this, mysql2 returns them as
+  // strings, which would silently break arithmetic like balance comparisons
+  // and the owed-accounts calculation.
+  decimalNumbers: true,
 });
 
 module.exports = { flexisipPool, adminPool };

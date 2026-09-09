@@ -99,6 +99,14 @@ async function listResellers(status) {
   return rows;
 }
 
+// Queried by role rather than a fixed id/username so notification code
+// (e.g. renewal-deduction emails) keeps working unchanged if a second admin
+// row is ever added.
+async function listAdminsByRole(role) {
+  const [rows] = await adminPool.query('SELECT id, username, email FROM admins WHERE role = ?', [role]);
+  return rows;
+}
+
 async function getResellerById(id) {
   const [rows] = await adminPool.query(
     "SELECT id, username, role, status, expires_at, expired_at, email, created_at FROM admins WHERE id = ? AND role = 'reseller' LIMIT 1",
@@ -193,6 +201,7 @@ module.exports = {
   recordFailedLogin,
   clearLoginLockout,
   listResellers,
+  listAdminsByRole,
   getResellerById,
   createReseller,
   updateResellerStatus,

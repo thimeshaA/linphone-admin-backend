@@ -1,0 +1,23 @@
+$kind: http-request
+name: Mark All Notifications Read
+method: PATCH
+url: '{{baseUrl}}/api/notifications/read-all'
+order: 1002
+description: |-
+  ## Purpose
+  Marks every unread notification belonging to the caller as read.
+
+  ## Use Case
+  Called by a "mark all as read" action in the frontend notifications inbox.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - Only ever affects the caller's own notifications - there is no way to bulk-mark another user's notifications, even as an admin.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - No body or params.
+
+  ## Responses
+  - **200 OK** - `{ "message": "All notifications marked as read" }`
+  - **401 Unauthorized** - missing or invalid auth token.

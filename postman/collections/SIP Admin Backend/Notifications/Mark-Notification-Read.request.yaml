@@ -1,0 +1,39 @@
+$kind: http-request
+name: Mark Notification Read
+method: PATCH
+url: '{{baseUrl}}/api/notifications/1/read'
+order: 1001
+description: |-
+  ## Purpose
+  Marks a single notification as read.
+
+  ## Use Case
+  Called when the caller opens/dismisses one notification in the frontend inbox.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - Only the recipient can mark their own notification as read - any other id (including another reseller's or another admin's) returns **404**.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` - the numeric id of the notification to mark read.
+
+  ## Responses
+  - **200 OK** - the updated notification row, e.g.:
+    ```json
+    {
+      "id": 1,
+      "recipient_id": 2,
+      "type": "renewal_deduction",
+      "title": "Wallet charged for renewal of alice@example.com",
+      "message": "...",
+      "payload": { "...": "..." },
+      "read_at": "2026-09-09T00:00:00.000Z",
+      "created_at": "2026-09-08T00:00:00.000Z"
+    }
+    ```
+  - **404 Not Found** - no notification with that id belongs to the caller.
+  - **401 Unauthorized** - missing or invalid auth token.
+
+  ## Notes
+  Idempotent - marking an already-read notification again returns the same row unchanged (its original `read_at` is preserved, not bumped to now).

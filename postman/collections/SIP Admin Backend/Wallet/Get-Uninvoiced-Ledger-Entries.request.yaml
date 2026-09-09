@@ -1,0 +1,36 @@
+$kind: http-request
+name: Get Uninvoiced Ledger Entries
+method: GET
+url: '{{baseUrl}}/api/resellers/2/wallet/uninvoiced'
+order: 1002
+description: |-
+  ## Purpose
+  Lists a reseller's `renewal_deduction` wallet-ledger entries that haven't been billed yet (`invoiced = false`).
+
+  ## Use Case
+  Powers the "generate invoice" screen - the admin picks which of these entries to bill before calling `POST /api/invoices`.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admin-only** - resellers receive **403 Forbidden**.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` - the numeric id of the reseller whose uninvoiced entries to fetch.
+
+  ## Responses
+  - **200 OK** -
+    ```json
+    {
+      "resellerId": 2,
+      "entries": [
+        { "id": 5, "type": "renewal_deduction", "amount_usd": -10, "invoiced": 0, "invoice_id": null, "...": "..." }
+      ]
+    }
+    ```
+  - **404 Not Found** - no reseller with that id exists.
+  - **403 Forbidden** - caller is a reseller.
+  - **401 Unauthorized** - missing or invalid auth token.
+
+  ## Notes
+  Only `renewal_deduction` entries are ever billable this way - top-ups and payments aren't candidates for invoicing. `amount_usd` is negative (deduction), matching how it's stored on the ledger; `POST /api/invoices` sums the absolute value into the invoice's positive `total_amount_usd`.

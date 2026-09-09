@@ -13,7 +13,8 @@ body:
       "username": "newadmin",
       "password": "securepassword",
       "email": "reseller@example.com",
-      "expires_at": null
+      "expires_at": null,
+      "initialCredit": 0
     }
 description: |-
   ## Purpose
@@ -32,13 +33,14 @@ description: |-
     - `username` (string) - unique login username for the reseller, e.g. `"newreseller"`.
     - `password` (string) - plaintext password; hashed server-side with bcrypt. Must be 10-128 characters and not on the local common-password blocklist - no forced complexity rules beyond that.
     - `email` (string) - valid contact email; stored on the reseller and used to send the credentials email below.
-  - **Optional body field:**
+  - **Optional body fields:**
     - `expires_at` (ISO date string) - initial expiry date for the reseller's access. Defaults to +6 months from now if omitted or `null`.
+    - `initialCredit` (number) - starting wallet balance (USD) for the new reseller. Must be a non-negative number if provided; defaults to `0`.
   - No `role` field is accepted - it is always set to `reseller` server-side.
 
   ## Responses
   - **201 Created** - reseller account created successfully.
-  - **400 Bad Request** - missing/invalid `email`, or `password` fails the password policy (returned as `errors.password`).
+  - **400 Bad Request** - missing/invalid `email`, `password` fails the password policy (returned as `errors.password`), or `initialCredit` is not a non-negative number (returned as `errors.initialCredit`).
   - **409 Conflict** - a reseller with the same `username` already exists.
   - **403 Forbidden** - caller is a reseller.
   - **401 Unauthorized** - missing or invalid auth token.
@@ -47,3 +49,5 @@ description: |-
   Only one primary admin account is allowed to exist, and it is created manually via direct SQL - never through this API. The bcrypt password hashing used here is intentionally different from the `MD5(authid:domain:password)` scheme used for SIP accounts in `auth_users`.
 
   After the reseller row is created, the backend emails `username` and the **plaintext** password (captured before hashing) plus the `ADMIN_PANEL_URL` login link to `email`. If that email fails to send, reseller creation still succeeds (the DB write is not rolled back) - the failure is only logged server-side, not surfaced in the response. Sending a plaintext password by email is a known-imperfect pattern; a one-time setup-link flow is a possible future improvement.
+
+  A wallet row is always created alongside the reseller, seeded from `initialCredit` (or `0`). If `initialCredit` is greater than `0`, a matching `initial_credit` entry is also logged in `wallet_ledger`. See `GET /api/resellers/:id/wallet`.

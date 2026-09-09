@@ -9,6 +9,10 @@ const accountsRoutes = require('./routes/accounts');
 const adminsRoutes = require('./routes/admins');
 const requestsRoutes = require('./routes/requests');
 const reportsRoutes = require('./routes/reports');
+const settingsRoutes = require('./routes/settings');
+const walletRoutes = require('./routes/wallet');
+const notificationsRoutes = require('./routes/notifications');
+const invoicesRoutes = require('./routes/invoices');
 
 const app = express();
 
@@ -24,6 +28,10 @@ app.use('/api/accounts', accountsRoutes);
 app.use('/api/admins', adminsRoutes);
 app.use('/api/requests', requestsRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/settings', settingsRoutes);
+app.use('/api/resellers', walletRoutes);
+app.use('/api/notifications', notificationsRoutes);
+app.use('/api/invoices', invoicesRoutes);
 
 module.exports = app;
 

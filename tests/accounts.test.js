@@ -3,10 +3,18 @@ const { TEST_ADMIN_PASSWORD, TEST_ADMIN } = require('./helpers/fixtures');
 
 jest.mock('../models/adminModel');
 jest.mock('../models/accountModel');
+jest.mock('../models/walletModel');
+jest.mock('../models/walletLedgerModel');
+jest.mock('../models/settingsModel');
+jest.mock('../models/notificationModel');
 jest.mock('../utils/mailer');
 
 const adminModel = require('../models/adminModel');
 const accountModel = require('../models/accountModel');
+const walletModel = require('../models/walletModel');
+const walletLedgerModel = require('../models/walletLedgerModel');
+const settingsModel = require('../models/settingsModel');
+const notificationModel = require('../models/notificationModel');
 const mailer = require('../utils/mailer');
 const app = require('../index');
 
@@ -32,15 +40,27 @@ describe('buildScopedWhereClause (pure function)', () => {
 let adminsByUsername;
 let resellersById;
 let accountsById;
+let walletsByResellerId;
+let ledgerEntries;
 let nextAdminId;
 let nextAccountId;
+let nextLedgerId;
+let renewalCost;
+let notifications;
+let nextNotificationId;
 
 function seedStore() {
   adminsByUsername = { [TEST_ADMIN.username]: TEST_ADMIN };
   resellersById = {};
   accountsById = {};
+  walletsByResellerId = {};
+  ledgerEntries = [];
   nextAdminId = 100;
   nextAccountId = 1000;
+  nextLedgerId = 1;
+  renewalCost = 0;
+  notifications = [];
+  nextNotificationId = 1;
 }
 
 function wireMocks() {
@@ -65,6 +85,80 @@ function wireMocks() {
     resellersById[id] = publicRow;
     adminsByUsername[username] = { ...publicRow, password_hash: passwordHash };
     return { ...publicRow };
+  });
+  adminModel.listAdminsByRole.mockImplementation(async (role) =>
+    Object.values(adminsByUsername)
+      .filter((admin) => admin.role === role)
+      .map(({ id, username, email }) => ({ id, username, email }))
+  );
+
+  walletModel.createWallet.mockImplementation(async (resellerId, balanceUsd) => {
+    walletsByResellerId[resellerId] = {
+      reseller_id: Number(resellerId),
+      balance_usd: balanceUsd,
+      updated_at: new Date(),
+    };
+  });
+
+  walletModel.getWalletByResellerId.mockImplementation(async (resellerId) => {
+    const wallet = walletsByResellerId[resellerId];
+    return wallet ? { ...wallet } : null;
+  });
+
+  walletModel.adjustWalletBalance.mockImplementation(async (resellerId, deltaUsd) => {
+    const wallet = walletsByResellerId[resellerId];
+    if (!wallet) return false;
+    wallet.balance_usd += deltaUsd;
+    wallet.updated_at = new Date();
+    return true;
+  });
+
+  walletLedgerModel.createLedgerEntry.mockImplementation(
+    async ({ resellerId, type, amountUsd, relatedAccountId, createdBy, note }) => {
+      const entry = {
+        id: nextLedgerId++,
+        reseller_id: Number(resellerId),
+        type,
+        amount_usd: amountUsd,
+        related_account_id: relatedAccountId ?? null,
+        invoiced: 0,
+        invoice_id: null,
+        created_by: createdBy ?? null,
+        note: note ?? null,
+        created_at: new Date(),
+      };
+      ledgerEntries.push(entry);
+      return entry;
+    }
+  );
+
+  walletLedgerModel.listLedgerForReseller.mockImplementation(async (resellerId, { page, limit }) => {
+    const rows = ledgerEntries
+      .filter((entry) => entry.reseller_id === Number(resellerId))
+      .sort((a, b) => b.id - a.id);
+    const start = (page - 1) * limit;
+    return { rows: rows.slice(start, start + limit).map((r) => ({ ...r })), total: rows.length };
+  });
+
+  settingsModel.getRenewalCost.mockImplementation(async () => renewalCost);
+  settingsModel.setRenewalCost.mockImplementation(async (value) => {
+    renewalCost = value;
+    return value;
+  });
+
+  notificationModel.createNotification.mockImplementation(async (recipientId, type, title, message, payload) => {
+    const notification = {
+      id: nextNotificationId++,
+      recipient_id: Number(recipientId),
+      type,
+      title,
+      message,
+      payload: payload ?? null,
+      read_at: null,
+      created_at: new Date(),
+    };
+    notifications.push(notification);
+    return { ...notification };
   });
 
   function scopedRow(id, scopeFilter) {
@@ -487,5 +581,129 @@ describe('Accounts flow (admin + reseller)', () => {
 
     const getRes = await adminAgent.get(`/api/accounts/${accountId}`);
     expect(getRes.status).toBe(404);
+  });
+});
+
+describe('Renewal wallet deduction (Phase 2)', () => {
+  const adminAgent = request.agent(app);
+  const resellerPassword = 'ResellerPass123!';
+  let reseller;
+  let account;
+
+  async function createReseller({ username, email, initialCredit }) {
+    const res = await adminAgent
+      .post('/api/admins')
+      .send({ username, password: resellerPassword, email, initialCredit });
+    expect(res.status).toBe(201);
+    return res.body;
+  }
+
+  async function createAccount({ authid, resellerId }) {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid,
+      domain: 'test.example.com',
+      password: 'AccountPass123!',
+      resellerId,
+      email: `${authid}@example.com`,
+    });
+    expect(res.status).toBe(201);
+    return res.body;
+  }
+
+  beforeAll(async () => {
+    const loginRes = await adminAgent
+      .post('/api/auth/login')
+      .send({ username: TEST_ADMIN.username, password: TEST_ADMIN_PASSWORD });
+    expect(loginRes.status).toBe(200);
+
+    const costRes = await adminAgent.put('/api/settings/renewal-cost').send({ renewalCost: 15 });
+    expect(costRes.status).toBe(200);
+
+    reseller = await createReseller({
+      username: `deduct_reseller_${Date.now()}`,
+      email: `deduct_reseller_${Date.now()}@example.com`,
+      initialCredit: 10,
+    });
+    account = await createAccount({ authid: `deduct_account_${Date.now()}`, resellerId: reseller.id });
+
+    mailer.sendMail.mockClear();
+  });
+
+  test('renewing deducts the renewal cost from the owning reseller wallet, pushing it negative', async () => {
+    const res = await adminAgent.patch(`/api/accounts/${account.id}/renew`).send({});
+    expect(res.status).toBe(200);
+
+    const walletRes = await adminAgent.get(`/api/resellers/${reseller.id}/wallet`);
+    expect(walletRes.body.balanceUsd).toBe(-5); // 10 initial - 15 renewal cost
+
+    const entry = walletRes.body.ledger.find((e) => e.type === 'renewal_deduction');
+    expect(entry).toMatchObject({
+      amount_usd: -15,
+      related_account_id: account.id,
+      invoiced: 0,
+    });
+  });
+
+  test('the renewal itself succeeds even though the wallet balance is already negative', async () => {
+    const res = await adminAgent.patch(`/api/accounts/${account.id}/renew`).send({});
+    expect(res.status).toBe(200);
+
+    const walletRes = await adminAgent.get(`/api/resellers/${reseller.id}/wallet`);
+    expect(walletRes.body.balanceUsd).toBe(-20); // -5 - 15
+  });
+
+  test('both the owning reseller and the admin receive the renewal-deduction email', async () => {
+    expect(mailer.sendMail).toHaveBeenCalled();
+
+    const lastCall = mailer.sendMail.mock.calls[mailer.sendMail.mock.calls.length - 1][0];
+    const recipients = lastCall.to.split(',').map((s) => s.trim());
+    expect(recipients).toEqual(expect.arrayContaining([reseller.email, TEST_ADMIN.email]));
+    expect(lastCall.subject).toContain(account.authid);
+  });
+
+  test('both the owning reseller and the admin receive a renewal-deduction notification row', async () => {
+    const recipientIds = notifications
+      .filter((n) => n.type === 'renewal_deduction')
+      .map((n) => n.recipient_id);
+    expect(recipientIds).toEqual(expect.arrayContaining([reseller.id, TEST_ADMIN.id]));
+
+    const resellerNotification = notifications.find(
+      (n) => n.type === 'renewal_deduction' && n.recipient_id === reseller.id
+    );
+    expect(resellerNotification.title).toContain(account.authid);
+    expect(resellerNotification.payload).toMatchObject({
+      accountId: account.id,
+      authid: account.authid,
+      domain: account.domain,
+    });
+  });
+
+  test('renewing an unassigned account succeeds without touching any wallet or sending mail', async () => {
+    const unassignedId = 555555;
+    accountsById[unassignedId] = {
+      id: unassignedId,
+      authid: `unassigned_${Date.now()}`,
+      domain: 'test.example.com',
+      created_at: new Date(),
+      status: 'active',
+      expires_at: new Date(),
+      disabled_at: null,
+      expired_at: null,
+      creator_id: null,
+      email: 'unassigned@example.com',
+    };
+
+    mailer.sendMail.mockClear();
+    walletModel.adjustWalletBalance.mockClear();
+    walletLedgerModel.createLedgerEntry.mockClear();
+    notificationModel.createNotification.mockClear();
+
+    const res = await adminAgent.patch(`/api/accounts/${unassignedId}/renew`).send({});
+
+    expect(res.status).toBe(200);
+    expect(walletModel.adjustWalletBalance).not.toHaveBeenCalled();
+    expect(walletLedgerModel.createLedgerEntry).not.toHaveBeenCalled();
+    expect(mailer.sendMail).not.toHaveBeenCalled();
+    expect(notificationModel.createNotification).not.toHaveBeenCalled();
   });
 });

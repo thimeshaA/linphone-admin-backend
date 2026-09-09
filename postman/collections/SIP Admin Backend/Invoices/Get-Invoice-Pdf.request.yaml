@@ -1,0 +1,28 @@
+$kind: http-request
+name: Get Invoice PDF
+method: GET
+url: '{{baseUrl}}/api/invoices/1/pdf'
+order: 1001
+description: |-
+  ## Purpose
+  Generates and streams the invoice as a PDF, built fresh from the stored line-item data every time (never persisted as a binary) - same convention as the account/reseller reports.
+
+  ## Use Case
+  Lets the admin preview a draft before sending it, and lets the reseller download their copy once it has been sent.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admins** can fetch any invoice's PDF, in any status.
+  - **Resellers** can only fetch their own invoice, and only once it is no longer `draft` - a still-`draft` invoice, or any other reseller's invoice, returns **404**.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` - the numeric id of the invoice.
+
+  ## Responses
+  - **200 OK** - `application/pdf` body, `Content-Disposition: attachment; filename="invoice-<id>.pdf"`.
+  - **404 Not Found** - no such invoice, it belongs to a different reseller, or (reseller caller) it's still `draft`.
+  - **401 Unauthorized** - missing or invalid auth token.
+
+  ## Notes
+  Visually a sibling of the monthly/annual reports (same brand cover, header/footer, local fonts). Contents: reseller name, invoice date, a line-item table (date, account, amount) for the invoiced deductions, the total due, and a note that payment is recorded manually - no online payment link is offered.

@@ -10,9 +10,18 @@ const {
   updateAccountPassword,
   deleteAccount,
 } = require('../models/accountModel');
-const { getResellerById, findAdminById, findAdminUsernamesByIds } = require('../models/adminModel');
+const {
+  getResellerById,
+  findAdminById,
+  findAdminUsernamesByIds,
+  listAdminsByRole,
+} = require('../models/adminModel');
+const { getWalletByResellerId, adjustWalletBalance } = require('../models/walletModel');
+const { createLedgerEntry } = require('../models/walletLedgerModel');
+const { getRenewalCost } = require('../models/settingsModel');
+const { createNotification } = require('../models/notificationModel');
 const { sendMail } = require('../utils/mailer');
-const { renderBatchAccountRequestHtml } = require('../utils/emailTemplates');
+const { renderBatchAccountRequestHtml, renderRenewalDeductionHtml } = require('../utils/emailTemplates');
 const { isValidEmail, isValidUsername } = require('../utils/validators');
 
 const REQUEST_RECIPIENT = 'enigma-admin@prometeolk.com';
@@ -211,6 +220,94 @@ async function requestAccounts(req, res) {
   return res.status(201).json({ message: 'Request submitted successfully' });
 }
 
+async function notifyRenewalDeduction({ account, reseller, amountUsd, balanceUsd }) {
+  const admins = await listAdminsByRole('admin');
+  const subject = `Wallet charged for renewal of ${account.authid}@${account.domain}`;
+  const text = `Account ${account.authid}@${account.domain} was renewed. $${amountUsd.toFixed(2)} was deducted from ${reseller.username}'s wallet. New balance: $${balanceUsd.toFixed(2)}.`;
+
+  // { accountId, authid, domain, amountUsd, balanceUsd } - the frontend can use
+  // accountId to deep-link into the account, and amountUsd/balanceUsd to render
+  // the amounts without re-parsing them out of `message`.
+  const payload = {
+    accountId: account.id,
+    authid: account.authid,
+    domain: account.domain,
+    amountUsd,
+    balanceUsd,
+  };
+
+  const recipientIds = [reseller.id, ...admins.map((admin) => admin.id)];
+  await Promise.all(
+    recipientIds.map((recipientId) =>
+      createNotification(recipientId, 'renewal_deduction', subject, text, payload).catch((err) => {
+        console.error('Failed to create renewal-deduction notification:', err);
+      })
+    )
+  );
+
+  const emailRecipients = [reseller.email, ...admins.map((admin) => admin.email)].filter(Boolean);
+  if (emailRecipients.length === 0) {
+    return;
+  }
+
+  const html = renderRenewalDeductionHtml({
+    authid: account.authid,
+    domain: account.domain,
+    resellerUsername: reseller.username,
+    amountUsd,
+    balanceUsd,
+  });
+
+  try {
+    await sendMail({
+      to: emailRecipients.join(', '),
+      subject,
+      text,
+      html,
+    });
+  } catch (err) {
+    console.error('Failed to send renewal-deduction notification email:', err);
+  }
+}
+
+// The wallet belongs to whoever owns the account (its creator_id), not to
+// whoever clicked renew - so an admin renewing on a reseller's behalf still
+// charges that reseller's wallet. Accounts with no owning reseller have no
+// wallet to deduct from, so they're skipped entirely. Deduction always
+// proceeds regardless of the resulting balance - renewals are never blocked
+// for insufficient funds.
+async function applyRenewalDeduction(account, actingAdminId) {
+  if (!account.creator_id) {
+    return;
+  }
+
+  const reseller = await getResellerById(account.creator_id);
+  if (!reseller) {
+    return;
+  }
+
+  const renewalCost = await getRenewalCost();
+  const amountUsd = -renewalCost;
+
+  await adjustWalletBalance(reseller.id, amountUsd);
+  await createLedgerEntry({
+    resellerId: reseller.id,
+    type: 'renewal_deduction',
+    amountUsd,
+    relatedAccountId: account.id,
+    createdBy: actingAdminId,
+    note: null,
+  });
+
+  const wallet = await getWalletByResellerId(reseller.id, {});
+  await notifyRenewalDeduction({
+    account,
+    reseller,
+    amountUsd: renewalCost,
+    balanceUsd: wallet.balance_usd,
+  });
+}
+
 async function renew(req, res) {
   const { expires_at } = req.body;
   const expiresAt = expires_at || defaultExpiresAt();
@@ -219,6 +316,8 @@ async function renew(req, res) {
   if (!account) {
     return res.status(404).json({ error: 'Account not found' });
   }
+
+  await applyRenewalDeduction(account, req.admin.id);
 
   return res.json(account);
 }

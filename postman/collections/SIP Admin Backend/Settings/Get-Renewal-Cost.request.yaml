@@ -1,0 +1,26 @@
+$kind: http-request
+name: Get Renewal Cost
+method: GET
+url: '{{baseUrl}}/api/settings/renewal-cost'
+order: 1000
+description: |-
+  ## Purpose
+  Reads the current per-renewal cost used to derive how many SIP accounts a reseller's negative wallet balance represents.
+
+  ## Use Case
+  Resellers need this to understand their own wallet deductions; admins need it before editing it or when reviewing billing.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admins and resellers** can both call this - it is not admin-only.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - No body, URL params, or query params.
+
+  ## Responses
+  - **200 OK** - `{ "renewalCost": number }`.
+  - **401 Unauthorized** - missing or invalid auth token.
+
+  ## Notes
+  Backed by a single-row `settings` table (`id = 1`) - there is currently only this one admin-editable value.

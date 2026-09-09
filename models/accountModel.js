@@ -48,6 +48,22 @@ async function findAccountByAuthid(authid) {
   return rows[0] || null;
 }
 
+// Bulk authid@domain lookup for invoice line items (wallet_ledger.related_account_id
+// points into this database's auth_users, not the admin one - see the cross-database
+// note on related_account_id in sql/wallets.sql - so it can't be joined in SQL and
+// has to be resolved with a separate query, same pattern as adminModel.findAdminUsernamesByIds).
+async function findAccountLabelsByIds(ids) {
+  if (!ids.length) return {};
+  const [rows] = await flexisipPool.query(
+    `SELECT id, authid, domain FROM auth_users WHERE id IN (${ids.map(() => '?').join(',')})`,
+    ids
+  );
+  return rows.reduce((map, row) => {
+    map[row.id] = `${row.authid}@${row.domain}`;
+    return map;
+  }, {});
+}
+
 async function createAccount({ authid, domain, passwordHash, status, expiresAt, creatorId, email }) {
   const [result] = await flexisipPool.query(
     'INSERT INTO auth_users (authid, domain, password, status, expires_at, creator_id, email) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -121,6 +137,7 @@ module.exports = {
   listAccounts,
   getAccountById,
   findAccountByAuthid,
+  findAccountLabelsByIds,
   createAccount,
   reassignAccountCreator,
   renewAccount,

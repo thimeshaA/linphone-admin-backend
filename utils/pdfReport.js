@@ -662,6 +662,22 @@ function renderTable(doc, { title, columns, rows }) {
 }
 
 // ---------------------------------------------------------------------------
+// Plain-text note - e.g. the invoice PDF's manual-payment disclaimer
+// ---------------------------------------------------------------------------
+
+function renderTextBlock(doc, text) {
+  const left = doc.page.margins.left;
+  const width = contentWidth(doc);
+
+  ensureSpace(doc, 40);
+  doc.fillColor(INK).fillOpacity(0.7).font('Helvetica').fontSize(9).text(text, left, doc.y, { width });
+  doc.fillOpacity(1);
+  doc.fillColor(INK);
+  doc.x = left;
+  doc.moveDown(0.6);
+}
+
+// ---------------------------------------------------------------------------
 // Top-level orchestration
 // ---------------------------------------------------------------------------
 
@@ -705,6 +721,8 @@ function renderReportPdf(stream, { reportTitle, periodLabel, generatedAt, sectio
       }
     } else if (section.kind === 'table') {
       renderTable(doc, section);
+    } else if (section.kind === 'text') {
+      renderTextBlock(doc, section.text);
     }
   });
 

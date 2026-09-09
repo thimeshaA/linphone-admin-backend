@@ -1,0 +1,31 @@
+$kind: http-request
+name: Send Invoice
+method: POST
+url: '{{baseUrl}}/api/invoices/1/send'
+order: 1002
+description: |-
+  ## Purpose
+  Emails the invoice PDF to the reseller and marks the invoice `sent`. A deliberate, separate step from `POST /api/invoices` - generating an invoice never sends it automatically.
+
+  ## Use Case
+  Called by the admin once they've reviewed the draft (e.g. via `GET /api/invoices/:id/pdf`) and are ready for the reseller to receive it.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admin-only** - resellers receive **403 Forbidden**.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` - the numeric id of the invoice. No body.
+  - The invoice must currently be `draft`, and the reseller must have an email on file.
+
+  ## Responses
+  - **200 OK** - the updated invoice, now `{ "status": "sent", "sent_at": "..." }`.
+  - **400 Bad Request** - the invoice isn't `draft` (already sent/paid), or the reseller has no email on file.
+  - **404 Not Found** - no invoice with that id.
+  - **502 Bad Gateway** - the email failed to send; the invoice is left `draft` so it can be retried.
+  - **403 Forbidden** - caller is a reseller.
+  - **401 Unauthorized** - missing or invalid auth token.
+
+  ## Notes
+  The PDF is attached to the email, and an `invoice_issued` in-app notification (`GET /api/notifications`) is also fired to the reseller.

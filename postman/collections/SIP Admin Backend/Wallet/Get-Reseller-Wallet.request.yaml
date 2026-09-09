@@ -1,0 +1,50 @@
+$kind: http-request
+name: Get Reseller Wallet
+method: GET
+url: '{{baseUrl}}/api/resellers/2/wallet'
+order: 1000
+params:
+  - key: page
+    value: '1'
+    disabled: true
+    description: 'Ledger page number (default 1)'
+  - key: limit
+    value: '20'
+    disabled: true
+    description: 'Ledger page size, max 100 (default 20)'
+description: |-
+  ## Purpose
+  Returns a reseller's wallet balance, derived owed-accounts count, and a paginated ledger history.
+
+  ## Use Case
+  Powers the reseller's own wallet view, and the admin's per-reseller wallet inspection.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - **Admins** can fetch any reseller's wallet.
+  - **Resellers** can only fetch their own wallet (`:id` must match their own id) - any other `:id` returns **404**, same as the cross-reseller scoping used on `/api/accounts`.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **URL param:** `:id` - the numeric id of the reseller whose wallet to fetch.
+  - **Optional query params:**
+    - `?page=` - ledger page number (default `1`).
+    - `?limit=` - ledger page size, max `100` (default `20`).
+
+  ## Responses
+  - **200 OK** -
+    ```json
+    {
+      "resellerId": 2,
+      "balanceUsd": -25,
+      "owedAccounts": 3,
+      "updatedAt": "2026-09-09T00:00:00.000Z",
+      "ledger": [ { "id": 1, "type": "admin_topup", "amount_usd": 40, "...": "..." } ],
+      "pagination": { "page": 1, "limit": 20, "total": 1 }
+    }
+    ```
+  - **404 Not Found** - no wallet for that reseller id, or (for a reseller caller) the id isn't their own.
+  - **401 Unauthorized** - missing or invalid auth token.
+
+  ## Notes
+  `owedAccounts` is derived, not stored: `balance < 0 ? ceil(abs(balance) / renewalCost) : 0`, using the current value from `GET /api/settings/renewal-cost`. It always rounds up - a partial debt still counts as one owed account.

@@ -13,6 +13,8 @@ const {
   renewReseller,
 } = require('../models/adminModel');
 const { createAuditLog } = require('../models/auditLogModel');
+const { createWallet } = require('../models/walletModel');
+const { createLedgerEntry } = require('../models/walletLedgerModel');
 const { sendMail } = require('../utils/mailer');
 const { renderPasswordChangedHtml } = require('../utils/emailTemplates');
 const { isValidEmail, isValidUsername, isValidPassword } = require('../utils/validators');
@@ -60,7 +62,7 @@ async function getOne(req, res) {
 }
 
 async function create(req, res) {
-  const { username, password, expires_at, email } = req.body;
+  const { username, password, expires_at, email, initialCredit } = req.body;
 
   const errors = {};
 
@@ -80,6 +82,14 @@ async function create(req, res) {
 
   if (expires_at !== undefined && expires_at !== null && Number.isNaN(new Date(expires_at).getTime())) {
     errors.expires_at = 'expires_at must be a valid date';
+  }
+
+  if (
+    initialCredit !== undefined &&
+    initialCredit !== null &&
+    (typeof initialCredit !== 'number' || !Number.isFinite(initialCredit) || initialCredit < 0)
+  ) {
+    errors.initialCredit = 'initialCredit must be a non-negative number';
   }
 
   if (Object.keys(errors).length > 0) {
@@ -103,6 +113,18 @@ async function create(req, res) {
     expiresAt: expires_at || defaultExpiresAt(),
     email,
   });
+
+  const credit = initialCredit || 0;
+  await createWallet(reseller.id, credit);
+  if (credit > 0) {
+    await createLedgerEntry({
+      resellerId: reseller.id,
+      type: 'initial_credit',
+      amountUsd: credit,
+      createdBy: req.admin.id,
+      note: null,
+    });
+  }
 
   try {
     await sendMail({

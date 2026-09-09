@@ -254,10 +254,57 @@ function renderPasswordChangedHtml({ username, changedAt }) {
   });
 }
 
+function formatUsd(amount) {
+  return `$${Number(amount).toFixed(2)}`;
+}
+
+function renderRenewalDeductionHtml({ authid, domain, resellerUsername, amountUsd, balanceUsd }) {
+  const rowsHtml = [
+    detailRow('Account', `${authid}@${domain}`),
+    detailRow('Reseller', resellerUsername),
+    detailRow('Amount deducted', formatUsd(amountUsd)),
+    detailRow('Wallet balance', formatUsd(balanceUsd)),
+  ].join('');
+
+  return renderEmailShell({
+    module: 'sip',
+    preheader: `Renewal deduction for ${authid}@${domain}`,
+    eyebrow: 'Wallet · Renewal deduction',
+    title: 'Account renewed - wallet charged',
+    intro: [
+      `SIP account <strong>${escapeHtml(authid)}@${escapeHtml(domain)}</strong> was renewed and <strong>${formatUsd(amountUsd)}</strong> was deducted from ${escapeHtml(resellerUsername)}'s wallet.`,
+    ],
+    rowsHtml,
+    footerNote:
+      'Automated notification from Admin Control. Renewals always proceed regardless of wallet balance.',
+  });
+}
+
+function renderInvoiceIssuedHtml({ resellerUsername, invoiceId, totalAmountUsd }) {
+  const rowsHtml = [detailRow('Invoice', `#${invoiceId}`), detailRow('Amount due', formatUsd(totalAmountUsd))].join(
+    ''
+  );
+
+  return renderEmailShell({
+    module: undefined,
+    preheader: `Invoice #${invoiceId} - ${formatUsd(totalAmountUsd)} due`,
+    eyebrow: 'Billing · Invoice',
+    title: `Invoice #${invoiceId}`,
+    intro: [
+      `Hi ${escapeHtml(resellerUsername)},`,
+      `Your invoice is attached as a PDF. Payment is recorded manually by our team once received - no online payment is required or accepted through this email.`,
+    ],
+    rowsHtml,
+    footerNote: 'Automated notification from Admin Control.',
+  });
+}
+
 module.exports = {
   renderOperationsNotificationHtml,
   renderVisitorConfirmationHtml,
   renderBatchAccountRequestHtml,
   renderPasswordResetHtml,
   renderPasswordChangedHtml,
+  renderRenewalDeductionHtml,
+  renderInvoiceIssuedHtml,
 };

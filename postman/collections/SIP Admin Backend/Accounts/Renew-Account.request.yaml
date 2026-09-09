@@ -36,4 +36,7 @@ description: |-
   - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
-  Renewing an account never touches `disabled_at`. Disabling and expiring are treated as two independent states - a renewed account can still be disabled.
+  - Renewing an account never touches `disabled_at`. Disabling and expiring are treated as two independent states - a renewed account can still be disabled.
+  - After a successful renewal, if the account has an owning reseller (`creator_id`), the current renewal cost (see `GET /api/settings/renewal-cost`) is deducted from **that reseller's** wallet as a `renewal_deduction` entry in `wallet_ledger` - regardless of who clicked renew (an admin renewing on a reseller's behalf still charges the reseller, not the admin). Accounts with no owning reseller are skipped entirely; no wallet exists to deduct from.
+  - This deduction always happens and the renewal always succeeds, even if it pushes the wallet balance negative - renewals are never blocked for insufficient funds.
+  - Once the deduction is recorded, an email is sent to the owning reseller and to every admin (`role = 'admin'`) stating which account was renewed, the amount deducted, and the resulting wallet balance. Email failures are only logged server-side and never affect the response.

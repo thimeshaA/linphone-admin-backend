@@ -1,0 +1,59 @@
+$kind: http-request
+name: List Notifications
+method: GET
+url: '{{baseUrl}}/api/notifications'
+order: 1000
+params:
+  - key: unread
+    value: 'true'
+    disabled: true
+    description: 'Only return unread notifications'
+  - key: page
+    value: '1'
+    disabled: true
+    description: 'Page number (default 1)'
+  - key: limit
+    value: '20'
+    disabled: true
+    description: 'Page size, max 100 (default 20)'
+description: |-
+  ## Purpose
+  Returns the caller's own in-app notifications, paginated.
+
+  ## Use Case
+  Powers the notifications bell/inbox in the frontend, for both admins and resellers.
+
+  ## Authentication
+  - Requires login (`verifyToken` cookie must be present and valid).
+  - Always scoped to the caller - there is no way to fetch another user's notifications, even as an admin.
+  - Returns **401** if the auth cookie is missing, invalid, or expired.
+
+  ## Request Requirements
+  - **Optional query params:**
+    - `?unread=true` - only return notifications with no `read_at`.
+    - `?page=` - page number (default `1`).
+    - `?limit=` - page size, max `100` (default `20`).
+
+  ## Responses
+  - **200 OK** -
+    ```json
+    {
+      "notifications": [
+        {
+          "id": 1,
+          "recipient_id": 2,
+          "type": "renewal_deduction",
+          "title": "Wallet charged for renewal of alice@example.com",
+          "message": "Account alice@example.com was renewed. $15.00 was deducted from reseller1's wallet. New balance: $-5.00.",
+          "payload": { "accountId": 42, "authid": "alice", "domain": "example.com", "amountUsd": 15, "balanceUsd": -5 },
+          "read_at": null,
+          "created_at": "2026-09-09T00:00:00.000Z"
+        }
+      ],
+      "pagination": { "page": 1, "limit": 20, "total": 1 }
+    }
+    ```
+  - **401 Unauthorized** - missing or invalid auth token.
+
+  ## Notes
+  `type` is a free-form string, not a fixed enum, so new notification types can be introduced without a schema/contract change. `payload` shape varies by `type` - see each event's documentation for its exact fields.
