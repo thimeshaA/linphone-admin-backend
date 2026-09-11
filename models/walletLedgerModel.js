@@ -59,6 +59,19 @@ async function linkLedgerEntriesToInvoice(ids, invoiceId) {
   );
 }
 
+// Backs invoice regeneration (POST /api/invoices replacing an existing
+// invoice for the same reseller+period): releases every entry currently
+// claimed by that invoice back to unclaimed (invoiced = 0, invoice_id NULL)
+// so getUninvoicedRenewalDeductionsInPeriod can freshly re-gather the full
+// set for the period - the released entries plus any new renewals recorded
+// since the invoice was first generated - rather than leaving them claimed
+// by an invoice that's about to be recomputed.
+async function unlinkLedgerEntriesFromInvoice(invoiceId) {
+  await adminPool.query('UPDATE wallet_ledger SET invoiced = 0, invoice_id = NULL WHERE invoice_id = ?', [
+    invoiceId,
+  ]);
+}
+
 async function getLedgerEntriesForInvoice(invoiceId) {
   const [rows] = await adminPool.query(
     `SELECT ${LEDGER_COLUMNS} FROM wallet_ledger WHERE invoice_id = ? AND type = 'renewal_deduction' ORDER BY created_at ASC`,
@@ -117,6 +130,7 @@ module.exports = {
   listLedgerForReseller,
   getUninvoicedRenewalDeductionsInPeriod,
   linkLedgerEntriesToInvoice,
+  unlinkLedgerEntriesFromInvoice,
   getLedgerEntriesForInvoice,
   getLedgerTotalsByType,
   getLedgerTotalsByTypeAndReseller,

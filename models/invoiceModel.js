@@ -37,6 +37,20 @@ async function createInvoice({ resellerId, periodType, periodValue, totalAmountU
   return rows[0];
 }
 
+// Backs invoice regeneration: an existing invoice for this reseller+period
+// gets its total recomputed from the freshly-gathered ledger entries and
+// sent_at reset to NULL - the previously-emailed version (if any) no longer
+// matches this content, so it reads as unsent again until an admin resends it.
+async function replaceInvoiceContents(id, totalAmountUsd) {
+  await adminPool.query('UPDATE invoices SET total_amount_usd = ?, sent_at = NULL WHERE id = ?', [
+    totalAmountUsd,
+    id,
+  ]);
+
+  const [rows] = await adminPool.query(`SELECT ${INVOICE_COLUMNS} FROM invoices WHERE id = ?`, [id]);
+  return rows[0];
+}
+
 async function getInvoiceById(id, scopeFilter) {
   const { condition, params } = buildScopedWhereClause(scopeFilter);
   const [rows] = await adminPool.query(
@@ -100,6 +114,7 @@ module.exports = {
   buildScopedWhereClause,
   findInvoiceByResellerAndPeriod,
   createInvoice,
+  replaceInvoiceContents,
   getInvoiceById,
   listInvoices,
   markInvoiceSent,

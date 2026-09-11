@@ -17,15 +17,20 @@ description: |-
 
   ## Request Requirements
   - **URL param:** `:id` - the numeric id of the invoice. No body.
-  - The invoice must not already have been sent, and the reseller must have an email on file.
+  - The invoice must not already have been sent, the reseller must have an email on file, and the invoice's period must have actually ended (see Notes).
 
   ## Responses
   - **200 OK** - the updated invoice, now with `sent_at` set.
-  - **400 Bad Request** - the invoice has already been sent, or the reseller has no email on file.
+  - **400 Bad Request** - the invoice has already been sent, the reseller has no email on file, or the period hasn't ended yet (`{ "error": "This invoice can't be sent until the period ends on 2026-09-30." }`).
   - **404 Not Found** - no invoice with that id.
   - **502 Bad Gateway** - the email failed to send; `sent_at` is left unset so it can be retried.
   - **403 Forbidden** - caller is a reseller.
   - **401 Unauthorized** - missing or invalid auth token.
+
+  ## Notes on the period-end restriction
+  Sending is locked until the invoice's period itself has actually finished - `2026-09` unlocks on Sept 30 2026, annual `2026` unlocks on Dec 31 2026 - so what gets emailed can't miss a renewal deduction recorded later in the same period. It's a date-only check (allowed for the entire last day, not just after midnight) compared against local server time, the same convention already used for `expires_at`/renewal date comparisons elsewhere in this API - no UTC conversion.
+
+  This restriction applies **only** to this endpoint. `POST /api/invoices` (generate/regenerate) and `GET /api/invoices/:id/pdf` (preview) remain available at any point during the period - an admin can review and regenerate an in-progress invoice throughout the month/year, they just can't email it until the period closes.
 
   ## Notes
   The PDF is attached to the email, and an `invoice_issued` in-app notification (`GET /api/notifications`) is also fired to the reseller. This never touches the reseller's wallet balance - top-up (`POST /api/resellers/:id/wallet/topup`) remains the only way a balance increases; there is no separate payment-recording endpoint.

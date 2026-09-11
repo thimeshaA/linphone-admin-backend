@@ -33,13 +33,15 @@ description: |-
     - `periodValue` (string) - `"YYYY-MM"` for a monthly period, `"YYYY"` for an annual one. Same format/validation as the `?month=`/`?year=` params on the account/reseller reports.
 
   ## Responses
-  - **201 Created** - the new invoice: `{ "id": number, "reseller_id": number, "period_type": "monthly", "period_value": "2026-08", "total_amount_usd": number, "created_at": "...", "sent_at": null }`.
+  - **201 Created** - no invoice existed yet for this `resellerId` + `periodType` + `periodValue`; a new one was created: `{ "id": number, "reseller_id": number, "period_type": "monthly", "period_value": "2026-08", "total_amount_usd": number, "created_at": "...", "sent_at": null }`.
+  - **200 OK** - an invoice already existed for this exact `resellerId` + `periodType` + `periodValue`; it was **replaced** in place (same `id`) - see Notes. Same body shape as 201.
   - **400 Bad Request** - `periodType`/`periodValue` is missing or malformed, or `resellerId` doesn't reference an existing reseller.
-  - **409 Conflict** - an invoice already exists for this exact `resellerId` + `periodType` + `periodValue`. The response body includes the existing invoice (`{ "error": "...", "invoice": {...} }`) so the caller can show its figures instead of erroring blindly. Regeneration is blocked outright, not recomputed or duplicated - see Notes.
   - **403 Forbidden** - caller is a reseller.
   - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
   There is no status/payment state on an invoice (Phase 4, corrected) - it is a statement of what was owed for the period, not a payment tracker. Whether the reseller has paid is reflected only by whether admin has since credited their wallet via `POST /api/resellers/:id/wallet/topup`.
 
-  Every ledger entry this invoice claims is stamped `invoiced = true` and linked via `invoice_id`, so it can never be pulled into a second invoice - this is what lets an *overlapping* period (e.g. generating an annual invoice for a year that already has some monthly invoices in it) safely skip whatever was already billed instead of double-counting it. Regenerating the *exact same* reseller+period, however, is rejected outright (409) rather than silently recomputed - once a period's invoice exists, correcting it is a manual/administrative matter, not something this endpoint does automatically.
+  Every ledger entry this invoice claims is stamped `invoiced = true` and linked via `invoice_id`, so it can never be pulled into a second invoice - this is what lets an *overlapping* period (e.g. generating an annual invoice for a year that already has some monthly invoices in it) safely skip whatever was already billed instead of double-counting it.
+
+  Regenerating the *exact same* reseller+period no longer returns 409 - it **replaces** the existing invoice instead: every ledger entry currently linked to it is released, the full set of unclaimed `renewal_deduction` entries for that reseller+period is regathered (the just-released entries plus any new renewals recorded since the last generation), the total is recomputed from that full set, and everything is re-linked to the *same* invoice row (no duplicate `id`, no second row). If the invoice had already been sent, `sent_at` is reset to `null` - a previously-emailed version no longer matches the recomputed content, so it reads as unsent again until an admin explicitly resends it via `POST /api/invoices/:id/send`.

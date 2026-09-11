@@ -1,13 +1,25 @@
 const { PassThrough } = require('stream');
 const { getResellerById } = require('../models/adminModel');
 const { findAccountLabelsByIds } = require('../models/accountModel');
-const { getUninvoicedRenewalDeductionsInPeriod, linkLedgerEntriesToInvoice, getLedgerEntriesForInvoice } = require('../models/walletLedgerModel');
-const { findInvoiceByResellerAndPeriod, createInvoice, getInvoiceById, listInvoices, markInvoiceSent } = require('../models/invoiceModel');
+const {
+  getUninvoicedRenewalDeductionsInPeriod,
+  linkLedgerEntriesToInvoice,
+  unlinkLedgerEntriesFromInvoice,
+  getLedgerEntriesForInvoice,
+} = require('../models/walletLedgerModel');
+const {
+  findInvoiceByResellerAndPeriod,
+  createInvoice,
+  replaceInvoiceContents,
+  getInvoiceById,
+  listInvoices,
+  markInvoiceSent,
+} = require('../models/invoiceModel');
 const { createNotification } = require('../models/notificationModel');
 const { sendMail } = require('../utils/mailer');
 const { renderInvoiceIssuedHtml } = require('../utils/emailTemplates');
 const { parsePeriod } = require('../utils/reportPeriod');
-const pdfReport = require('../utils/pdfReport');
+const pdfInvoice = require('../utils/pdfInvoice');
 
 const EMPTY = '-';
 
@@ -39,6 +51,37 @@ function periodLabelFor(periodType, periodValue) {
   return period.error ? periodValue : period.label;
 }
 
+// A period's last calendar day - e.g. 2026-09-30 for monthly '2026-09',
+// 2026-12-31 for annual '2026' - derived from period.end (the half-open
+// upper bound resolvePeriod already produces for gathering ledger entries)
+// rather than separate date math, so "when does this period end" can never
+// drift from what it already means elsewhere in the invoice flow.
+function lastDayOfPeriod(period) {
+  return new Date(period.end.getFullYear(), period.end.getMonth(), period.end.getDate() - 1);
+}
+
+// Local calendar "today" with time-of-day stripped - local-component Date
+// construction/comparison, matching how the rest of the app already compares
+// dates (see renewAccount's `new Date(expiresAt) > new Date()` and
+// defaultExpiresAt/renewalUnitsForPeriod in accountsController.js), not a
+// UTC conversion.
+function todayDateOnly() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+// Local-component "YYYY-MM-DD" formatting - deliberately not reusing
+// formatDate() above (which slices a UTC ISO string) for this comparison's
+// cutoff date, since that UTC conversion can shift the displayed date by a
+// day depending on the server's offset from UTC. This stays on the same
+// local-Date convention the comparison itself uses.
+function formatDateOnly(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 async function create(req, res) {
   const { resellerId, periodType, periodValue } = req.body;
 
@@ -52,16 +95,26 @@ async function create(req, res) {
     return res.status(400).json({ error: 'resellerId does not reference an existing reseller' });
   }
 
-  // An invoice is one document per reseller per exact period - re-running the
-  // same period must never create a duplicate (or worse, an empty one, since
-  // by then every entry in it would already be `invoiced`). Reject instead of
-  // silently recomputing so the admin sees exactly why nothing new happened.
+  // An invoice is one document per reseller per exact period (see the unique
+  // constraint in sql/invoices.sql) - but re-running the same period is no
+  // longer rejected. Instead the existing invoice is replaced: its old ledger
+  // entries are released, the full unclaimed set for the period is regathered
+  // (the released entries plus anything new since the last generation), and
+  // the invoice is recomputed and re-linked in place. sent_at is reset to
+  // NULL since a previously-emailed version no longer matches this content.
   const existing = await findInvoiceByResellerAndPeriod(resellerId, periodType, periodValue);
   if (existing) {
-    return res.status(409).json({
-      error: 'An invoice already exists for this reseller and period',
-      invoice: existing,
-    });
+    await unlinkLedgerEntriesFromInvoice(existing.id);
+
+    const entries = await getUninvoicedRenewalDeductionsInPeriod(resellerId, period.start, period.end);
+    // amount_usd is stored negative for deductions (see applyRenewalDeduction);
+    // the invoice total owed is the positive sum.
+    const totalAmountUsd = entries.reduce((sum, e) => sum - Number(e.amount_usd), 0);
+
+    const invoice = await replaceInvoiceContents(existing.id, totalAmountUsd);
+    await linkLedgerEntriesToInvoice(entries.map((e) => e.id), existing.id);
+
+    return res.status(200).json(invoice);
   }
 
   const entries = await getUninvoicedRenewalDeductionsInPeriod(resellerId, period.start, period.end);
@@ -75,57 +128,30 @@ async function create(req, res) {
   return res.status(201).json(invoice);
 }
 
-async function buildInvoiceSections(invoice, reseller, periodLabel) {
+async function buildInvoiceLineItems(invoice) {
   const ledgerRows = await getLedgerEntriesForInvoice(invoice.id);
   const accountIds = [...new Set(ledgerRows.map((r) => r.related_account_id).filter((id) => id !== null))];
   const accountLabels = await findAccountLabelsByIds(accountIds);
 
-  const lineItems = ledgerRows.map((r) => ({
+  return ledgerRows.map((r) => ({
     date: formatDate(r.created_at),
     account: accountLabels[r.related_account_id] || EMPTY,
     amount: formatUsd(Math.abs(Number(r.amount_usd))),
   }));
-
-  return [
-    {
-      title: 'Invoice Summary',
-      kind: 'kpis',
-      stats: [
-        { label: 'Reseller', value: reseller ? reseller.username : `Reseller #${invoice.reseller_id}` },
-        { label: 'Period', value: periodLabel },
-        { label: 'Total Owed', value: formatUsd(invoice.total_amount_usd) },
-      ],
-    },
-    {
-      title: 'Line Items',
-      kind: 'table',
-      columns: [
-        { key: 'date', label: 'Date', width: 100, align: 'left' },
-        { key: 'account', label: 'Account', flex: 2, align: 'left' },
-        { key: 'amount', label: 'Amount', width: 100, align: 'right' },
-      ],
-      rows: lineItems,
-    },
-  ];
 }
 
-function renderInvoicePdfToStream(stream, invoice, periodLabel, sections) {
-  pdfReport.renderReportPdf(stream, {
-    reportTitle: `Invoice #${invoice.id}`,
-    periodLabel,
-    generatedAt: new Date(),
-    sections,
-  });
+function renderInvoicePdfToStream(stream, invoice, reseller, periodLabel, lineItems) {
+  pdfInvoice.renderInvoicePdf(stream, { invoice, reseller, periodLabel, lineItems });
 }
 
-function buildPdfBuffer(invoice, periodLabel, sections) {
+function buildPdfBuffer(invoice, reseller, periodLabel, lineItems) {
   return new Promise((resolve, reject) => {
     const stream = new PassThrough();
     const chunks = [];
     stream.on('data', (chunk) => chunks.push(chunk));
     stream.on('end', () => resolve(Buffer.concat(chunks)));
     stream.on('error', reject);
-    renderInvoicePdfToStream(stream, invoice, periodLabel, sections);
+    renderInvoicePdfToStream(stream, invoice, reseller, periodLabel, lineItems);
   });
 }
 
@@ -143,11 +169,11 @@ async function getPdf(req, res) {
 
   const reseller = await getResellerById(invoice.reseller_id);
   const periodLabel = periodLabelFor(invoice.period_type, invoice.period_value);
-  const sections = await buildInvoiceSections(invoice, reseller, periodLabel);
+  const lineItems = await buildInvoiceLineItems(invoice);
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="invoice-${invoice.id}.pdf"`);
-  renderInvoicePdfToStream(res, invoice, periodLabel, sections);
+  renderInvoicePdfToStream(res, invoice, reseller, periodLabel, lineItems);
 }
 
 async function send(req, res) {
@@ -160,6 +186,17 @@ async function send(req, res) {
     return res.status(400).json({ error: 'Invoice has already been sent' });
   }
 
+  // Sending is locked until the period has actually finished - generation,
+  // regeneration, and PDF preview (create()/getPdf() above) stay available
+  // throughout the period; only the send/email action waits, so what gets
+  // emailed reflects every renewal deduction that could still land in it.
+  const cutoff = lastDayOfPeriod(resolvePeriod(invoice.period_type, invoice.period_value));
+  if (todayDateOnly() < cutoff) {
+    return res.status(400).json({
+      error: `This invoice can't be sent until the period ends on ${formatDateOnly(cutoff)}.`,
+    });
+  }
+
   const reseller = await getResellerById(invoice.reseller_id);
   if (!reseller) {
     return res.status(404).json({ error: 'Reseller not found' });
@@ -170,8 +207,8 @@ async function send(req, res) {
   }
 
   const periodLabel = periodLabelFor(invoice.period_type, invoice.period_value);
-  const sections = await buildInvoiceSections(invoice, reseller, periodLabel);
-  const pdfBuffer = await buildPdfBuffer(invoice, periodLabel, sections);
+  const lineItems = await buildInvoiceLineItems(invoice);
+  const pdfBuffer = await buildPdfBuffer(invoice, reseller, periodLabel, lineItems);
 
   try {
     await sendMail({
