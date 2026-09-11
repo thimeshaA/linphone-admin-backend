@@ -271,38 +271,19 @@ describe('Admins (reseller management) flow', () => {
     expect(res.body).toEqual({ error: 'Account is disabled' });
   });
 
-  test('8a. reset-password without the admin\'s own currentPassword is rejected with 400', async () => {
+  test('8a. reset-password with a weak newPassword is rejected with 400', async () => {
+    const res = await adminAgent
+      .patch(`/api/admins/${resellerId}/reset-password`)
+      .send({ newPassword: 'short1!' });
+
+    expect(res.status).toBe(400);
+    expect(adminModel.updateResellerPassword).not.toHaveBeenCalled();
+  });
+
+  test('8. reset that reseller\'s password as admin (no step-up auth - admin session authority is sufficient)', async () => {
     const res = await adminAgent
       .patch(`/api/admins/${resellerId}/reset-password`)
       .send({ newPassword: newResellerPassword });
-
-    expect(res.status).toBe(400);
-    expect(adminModel.updateResellerPassword).not.toHaveBeenCalled();
-  });
-
-  test('8b. reset-password with the wrong currentPassword for the acting admin is rejected with 401', async () => {
-    const res = await adminAgent
-      .patch(`/api/admins/${resellerId}/reset-password`)
-      .send({ currentPassword: 'NotTheAdminsPassword!', newPassword: newResellerPassword });
-
-    expect(res.status).toBe(401);
-    expect(res.body).toEqual({ error: 'Current password is incorrect' });
-    expect(adminModel.updateResellerPassword).not.toHaveBeenCalled();
-  });
-
-  test('8c. reset-password with a weak newPassword is rejected with 400', async () => {
-    const res = await adminAgent
-      .patch(`/api/admins/${resellerId}/reset-password`)
-      .send({ currentPassword: TEST_ADMIN_PASSWORD, newPassword: 'short1!' });
-
-    expect(res.status).toBe(400);
-    expect(adminModel.updateResellerPassword).not.toHaveBeenCalled();
-  });
-
-  test('8. reset that reseller\'s password as admin (step-up auth: admin\'s own current password required)', async () => {
-    const res = await adminAgent
-      .patch(`/api/admins/${resellerId}/reset-password`)
-      .send({ currentPassword: TEST_ADMIN_PASSWORD, newPassword: newResellerPassword });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: 'Password reset successfully' });

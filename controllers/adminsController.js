@@ -2,7 +2,6 @@ const bcrypt = require('bcrypt');
 const {
   findAdminByUsername,
   findAdminByEmail,
-  findAdminById,
   listResellers,
   getResellerById,
   createReseller,
@@ -203,31 +202,20 @@ async function update(req, res) {
   return res.json(updated);
 }
 
-// Step-up auth: resetting another account's password is a highly privileged
-// action, so the acting admin must re-confirm their own current password
-// (same check as the self-service changePassword flow) rather than just
-// riding on an existing session cookie - this limits the blast radius of a
-// hijacked admin session.
+// Admin-only (route-level `requireAdmin`) - resets a reseller's login
+// password directly. No step-up re-confirmation of the acting admin's own
+// password: an admin session already carries that authority here, the same
+// as every other admin action against a reseller (disable, renew, etc).
+// Self-service password changes (an account changing its own) go through
+// authController.changePassword instead, which does require the current
+// password - that one's a different threat model (proving it's really you,
+// not an admin exercising standing authority over someone else's account).
 async function resetPassword(req, res) {
-  const { currentPassword, newPassword } = req.body;
-
-  if (!currentPassword) {
-    return res.status(400).json({ error: 'currentPassword is required' });
-  }
+  const { newPassword } = req.body;
 
   const passwordError = isValidPassword(newPassword);
   if (passwordError) {
     return res.status(400).json({ error: passwordError });
-  }
-
-  const actingAdmin = await findAdminById(req.admin.id);
-  if (!actingAdmin) {
-    return res.status(404).json({ error: 'Account not found' });
-  }
-
-  const passwordMatches = await bcrypt.compare(currentPassword, actingAdmin.password_hash);
-  if (!passwordMatches) {
-    return res.status(401).json({ error: 'Current password is incorrect' });
   }
 
   const reseller = await getResellerById(req.params.id);
@@ -239,8 +227,8 @@ async function resetPassword(req, res) {
   await updateResellerPassword(req.params.id, passwordHash);
 
   await createAuditLog({
-    actorId: actingAdmin.id,
-    actorRole: actingAdmin.role,
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
     action: 'admin_reset_password',
     targetId: req.params.id,
     ip: req.ip,
