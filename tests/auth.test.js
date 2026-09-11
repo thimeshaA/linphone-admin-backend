@@ -346,4 +346,30 @@ describe('Auth flow', () => {
     const res = await request(app).post('/api/auth/login').send({ username, password: 'whatever123' });
     expect(res.status).toBe(429);
   });
+
+  test('19. successful logins do not count toward the login rate limit - only failed attempts do', async () => {
+    adminModel.findAdminByUsername.mockResolvedValue(TEST_ADMIN);
+
+    // More than MAX_ATTEMPTS (3) successful logins in a row for the same
+    // username - none of these should ever trip the limiter.
+    for (let i = 0; i < 5; i += 1) {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ username: TEST_ADMIN.username, password: TEST_ADMIN_PASSWORD });
+      expect(res.status).toBe(200);
+    }
+
+    // Failed attempts against the same username still count as usual, and
+    // still trip the limiter on the same budget as test 18 above.
+    for (let i = 0; i < 3; i += 1) {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ username: TEST_ADMIN.username, password: 'WrongPassword!' });
+      expect(res.status).toBe(401);
+    }
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ username: TEST_ADMIN.username, password: 'WrongPassword!' });
+    expect(res.status).toBe(429);
+  });
 });

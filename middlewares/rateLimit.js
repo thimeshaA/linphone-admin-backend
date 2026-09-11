@@ -31,11 +31,16 @@ const forgotPasswordLimiter = rateLimit({
 // Keyed on IP + username/email together, same reasoning as above - this is
 // the primary brute-force/credential-stuffing guard on the login endpoint,
 // separate from and in addition to the per-account lockout in authController.
+// skipSuccessfulRequests means only failed attempts count toward the limit -
+// without it, a legitimate user logging in/out repeatedly (or a token expiring
+// and re-logging in) burns through the same budget as a brute-force attempt
+// and gets locked out despite never once failing.
 const loginLimiter = rateLimit({
   windowMs: WINDOW_MS,
   max: MAX_ATTEMPTS,
   standardHeaders: true,
   legacyHeaders: false,
+  skipSuccessfulRequests: true,
   store: loginStore,
   keyGenerator: (req) => {
     const identifier = String(req.body?.username || '').trim().toLowerCase();
