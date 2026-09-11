@@ -3,9 +3,11 @@ const { adminPool } = require('../config/db');
 const NOTIFICATION_COLUMNS = 'id, recipient_id, type, title, message, payload, read_at, created_at';
 
 async function createNotification(recipientId, type, title, message, payload) {
+  const serializedPayload = payload == null ? null : JSON.stringify(payload);
+
   const [result] = await adminPool.query(
     'INSERT INTO notifications (recipient_id, type, title, message, payload) VALUES (?, ?, ?, ?, ?)',
-    [recipientId, type, title, message, payload ?? null]
+    [recipientId, type, title, message, serializedPayload]
   );
 
   const [rows] = await adminPool.query(`SELECT ${NOTIFICATION_COLUMNS} FROM notifications WHERE id = ?`, [
