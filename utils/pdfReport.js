@@ -9,21 +9,15 @@ const LOGO_PATH = path.join(__dirname, '..', 'assets', 'logo-light.png');
 const LOGO_MARK_DARK_PATH = path.join(__dirname, '..', 'assets', 'logo-mark-dark.png');
 const LOGO_SIZE = 26;
 
-// The report is portrait A4 throughout except sections carrying a wide data
-// table (see sectionNeedsLandscape), which switch to landscape so columns
-// stay legible. `doc._pageOptions` tracks which one new pages should use —
-// addPage() with no options reverts pdfkit to the *document's original*
-// options, not the current page's, so every page-break site must go through
-// addReportPage() rather than a bare doc.addPage().
-const PORTRAIT_OPTIONS = { size: 'A4', margin: PAGE_MARGIN };
-const LANDSCAPE_OPTIONS = { size: 'A4', layout: 'landscape', margin: PAGE_MARGIN };
+// The whole report is landscape A4, every page - addPage() with no options
+// reuses the *document's original* creation options (see PAGE_OPTIONS below),
+// so every page-break site goes through addReportPage() rather than a bare
+// doc.addPage() with explicit options, keeping this the one place page size
+// is decided.
+const PAGE_OPTIONS = { size: 'A4', layout: 'landscape', margin: PAGE_MARGIN };
 
 function addReportPage(doc) {
-  doc.addPage(doc._pageOptions);
-}
-
-function sectionNeedsLandscape(section) {
-  return section.kind === 'table' || (section.kind === 'bar-and-table' && !!section.table);
+  doc.addPage();
 }
 
 function formatDateTime(date) {
@@ -682,8 +676,7 @@ function renderTextBlock(doc, text) {
 // ---------------------------------------------------------------------------
 
 function renderReportPdf(stream, { reportTitle, periodLabel, generatedAt, sections }) {
-  const doc = new PDFDocument({ ...PORTRAIT_OPTIONS, bufferPages: true });
-  doc._pageOptions = PORTRAIT_OPTIONS;
+  const doc = new PDFDocument({ ...PAGE_OPTIONS, bufferPages: true });
   doc.pipe(stream);
 
   let currentLabel = sections.length ? `01 - ${sections[0].title}` : '';
@@ -692,18 +685,9 @@ function renderReportPdf(stream, { reportTitle, periodLabel, generatedAt, sectio
   renderCover(doc, { reportTitle, periodLabel, generatedAt });
   addReportPage(doc);
 
-  let isLandscape = false;
-
   sections.forEach((section, i) => {
     const number = i + 1;
     currentLabel = `${String(number).padStart(2, '0')} - ${section.title}`;
-
-    const needsLandscape = sectionNeedsLandscape(section);
-    if (needsLandscape !== isLandscape) {
-      isLandscape = needsLandscape;
-      doc._pageOptions = isLandscape ? LANDSCAPE_OPTIONS : PORTRAIT_OPTIONS;
-      addReportPage(doc);
-    }
 
     renderSectionHeading(doc, number, section.title);
 

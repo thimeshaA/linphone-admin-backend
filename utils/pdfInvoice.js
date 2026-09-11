@@ -171,10 +171,15 @@ function renderTable(doc, { lineItems, startY, addContinuationPage }) {
   const colWidths = TABLE_COLUMNS.map((c) => c.widthRatio * width);
   const rows = lineItems.length ? lineItems : [{ date: '', account: 'No renewals in this period.', amount: '' }];
 
+  // Math.floor, not a plain division - a row height that exactly fills
+  // availableFirstPage (e.g. 17.43px) drifts over budget by the time N rows'
+  // worth of floating-point additions accumulate, triggering a spurious
+  // extra page for content that should have fit. Flooring to a whole pixel
+  // guarantees rowHeight * rows.length never exceeds availableFirstPage.
   const availableFirstPage = doc.page.height - PAGE_MARGIN - BOTTOM_RESERVE - startY - TABLE_HEADER_HEIGHT;
   const rowHeight = Math.max(
     TABLE_MIN_ROW_HEIGHT,
-    Math.min(TABLE_IDEAL_ROW_HEIGHT, availableFirstPage / Math.max(rows.length, 1))
+    Math.min(TABLE_IDEAL_ROW_HEIGHT, Math.floor(availableFirstPage / Math.max(rows.length, 1)))
   );
 
   let y = startY;
@@ -294,7 +299,7 @@ function renderFooter(doc) {
 }
 
 function renderInvoicePdf(stream, { invoice, reseller, periodLabel, lineItems }) {
-  const doc = new PDFDocument({ size: 'A4', margin: PAGE_MARGIN });
+  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: PAGE_MARGIN });
   doc.pipe(stream);
 
   drawFrame(doc);
