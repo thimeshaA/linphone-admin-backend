@@ -780,4 +780,81 @@ describe('Renewal wallet deduction (Phase 2)', () => {
     const expectedBalance = resellerLedger.reduce((sum, e) => sum + Number(e.amount_usd), 0);
     expect(walletsByResellerId[reseller.id].balance_usd).toBe(expectedBalance);
   });
+
+  describe('proportional pricing by renewal period', () => {
+    let propReseller;
+    let propAccount;
+
+    // Mirrors the controller's own 6-month-hop loop (renewalUnitsForPeriod)
+    // so the date this test sends matches exactly what N hops would produce,
+    // regardless of day-of-month rollover quirks.
+    function hopSixMonths(date, times) {
+      const d = new Date(date);
+      for (let i = 0; i < times; i++) {
+        d.setMonth(d.getMonth() + 6);
+      }
+      return d.toISOString();
+    }
+
+    beforeAll(async () => {
+      propReseller = await createReseller({
+        username: `deduct_period_${Date.now()}`,
+        email: `deduct_period_${Date.now()}@example.com`,
+        initialCredit: 1000,
+      });
+      propAccount = await createAccount({
+        authid: `deduct_period_account_${Date.now()}`,
+        resellerId: propReseller.id,
+      });
+
+      // Pin to a known, safe day-of-month (the 15th, valid in every month) so
+      // the hop math below is deterministic no matter what day this suite
+      // actually runs on.
+      const pinned = await adminAgent
+        .patch(`/api/accounts/${propAccount.id}/renew`)
+        .send({ expires_at: '2030-01-15T00:00:00.000Z' });
+      expect(pinned.status).toBe(200);
+      propAccount = pinned.body;
+    });
+
+    test('extending the expiry by exactly 12 months (two 6-month units) deducts 2x the configured rate', async () => {
+      const newExpiresAt = hopSixMonths(propAccount.expires_at, 2);
+      const balanceBefore = walletsByResellerId[propReseller.id].balance_usd;
+
+      const res = await adminAgent.patch(`/api/accounts/${propAccount.id}/renew`).send({ expires_at: newExpiresAt });
+      expect(res.status).toBe(200);
+      propAccount = res.body;
+
+      expect(walletsByResellerId[propReseller.id].balance_usd).toBe(balanceBefore - 30); // 2 * 15
+
+      const entry = [...ledgerEntries]
+        .reverse()
+        .find((e) => e.reseller_id === propReseller.id && e.related_account_id === propAccount.id);
+      expect(entry.amount_usd).toBe(-30);
+    });
+
+    test('extending the expiry by exactly 6 months (one unit) deducts 1x the configured rate', async () => {
+      const newExpiresAt = hopSixMonths(propAccount.expires_at, 1);
+      const balanceBefore = walletsByResellerId[propReseller.id].balance_usd;
+
+      const res = await adminAgent.patch(`/api/accounts/${propAccount.id}/renew`).send({ expires_at: newExpiresAt });
+      expect(res.status).toBe(200);
+      propAccount = res.body;
+
+      expect(walletsByResellerId[propReseller.id].balance_usd).toBe(balanceBefore - 15);
+    });
+
+    test('extending the expiry by a partial period (8 months - past 1 unit, short of 2) rounds up to 2x the rate', async () => {
+      const base = new Date(propAccount.expires_at);
+      base.setMonth(base.getMonth() + 8);
+      const newExpiresAt = base.toISOString();
+
+      const balanceBefore = walletsByResellerId[propReseller.id].balance_usd;
+      const res = await adminAgent.patch(`/api/accounts/${propAccount.id}/renew`).send({ expires_at: newExpiresAt });
+      expect(res.status).toBe(200);
+      propAccount = res.body;
+
+      expect(walletsByResellerId[propReseller.id].balance_usd).toBe(balanceBefore - 30);
+    });
+  });
 });

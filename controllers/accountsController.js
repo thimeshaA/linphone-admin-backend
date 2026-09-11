@@ -36,6 +36,32 @@ function defaultExpiresAt() {
   return date;
 }
 
+function addMonths(date, months) {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + months);
+  return result;
+}
+
+// renewal_cost_usd (see settingsModel.js) is priced per 6-month period, not
+// per renewal - a 1-year extension costs 2x, a 4-month extension still costs
+// 1x (rounded up, never undercharged). Counted by repeatedly hopping 6
+// months from the account's expiry *before* this renewal to its expiry
+// *after* this renewal, rather than dividing day counts, so it exactly
+// matches the calendar-month arithmetic defaultExpiresAt() itself uses (and
+// isn't thrown off by 28-31 day month lengths or leap years).
+function renewalUnitsForPeriod(previousExpiresAt, newExpiresAt) {
+  const previous = new Date(previousExpiresAt);
+  const next = new Date(newExpiresAt);
+
+  let units = 0;
+  let cursor = previous;
+  while (cursor < next) {
+    cursor = addMonths(cursor, 6);
+    units += 1;
+  }
+  return Math.max(units, 1);
+}
+
 async function validateResellerId(resellerId) {
   if (resellerId === undefined || resellerId === null) {
     return { error: 'resellerId is required' };
@@ -282,7 +308,7 @@ async function notifyRenewalDeduction({ account, reseller, amountUsd, balanceUsd
 // its wallets row (e.g. one predating the wallet feature, not yet backfilled)
 // must not crash the renewal after the ledger entry has already been
 // written; it's logged instead so it surfaces as an operational data issue.
-async function applyRenewalDeduction(account, actingAdminId) {
+async function applyRenewalDeduction(account, actingAdminId, previousExpiresAt) {
   if (!account.creator_id) {
     return;
   }
@@ -292,27 +318,29 @@ async function applyRenewalDeduction(account, actingAdminId) {
     return;
   }
 
-  const renewalCost = await getRenewalCost();
+  const renewalRate = await getRenewalCost();
   // null (missing settings row) or anything that isn't a valid non-negative
   // number is a misconfiguration, not a legitimate "free renewal" - writing
   // a $0 ledger entry in that case would look like a real transaction that
   // just happened to cost nothing, masking the actual problem. A genuinely
   // configured 0 (updateRenewalCostSetting accepts it) is not an error, but
   // is unusual enough to warn about loudly rather than deduct silently.
-  if (renewalCost === null || typeof renewalCost !== 'number' || !Number.isFinite(renewalCost) || renewalCost < 0) {
+  if (renewalRate === null || typeof renewalRate !== 'number' || !Number.isFinite(renewalRate) || renewalRate < 0) {
     console.error(
       `Renewal deduction skipped for reseller ${reseller.id} (account ${account.id}): renewal cost setting is ${
-        renewalCost === null ? 'missing' : `invalid (${renewalCost})`
+        renewalRate === null ? 'missing' : `invalid (${renewalRate})`
       } - no wallet_ledger entry was written. Configure it via PUT /api/settings/renewal-cost.`
     );
     return;
   }
-  if (renewalCost === 0) {
+  if (renewalRate === 0) {
     console.warn(
       `Renewal deduction for reseller ${reseller.id} (account ${account.id}): renewal cost is configured at $0 - recording a zero-amount deduction. If unintentional, set a real value via PUT /api/settings/renewal-cost.`
     );
   }
 
+  const units = renewalUnitsForPeriod(previousExpiresAt, account.expires_at);
+  const renewalCost = renewalRate * units;
   const amountUsd = -renewalCost;
 
   const walletBefore = await getWalletByResellerId(reseller.id, {});
@@ -345,12 +373,20 @@ async function renew(req, res) {
   const { expires_at } = req.body;
   const expiresAt = expires_at || defaultExpiresAt();
 
+  // Captured before the update so the deduction can be priced off of how far
+  // this renewal actually extends the account, not just the new expiry
+  // taken in isolation (see renewalUnitsForPeriod).
+  const existingAccount = await getAccountById(req.params.id, req.scopeFilter);
+  if (!existingAccount) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+
   const account = await renewAccount(req.params.id, req.scopeFilter, expiresAt);
   if (!account) {
     return res.status(404).json({ error: 'Account not found' });
   }
 
-  await applyRenewalDeduction(account, req.admin.id);
+  await applyRenewalDeduction(account, req.admin.id, existingAccount.expires_at);
 
   return res.json(account);
 }
