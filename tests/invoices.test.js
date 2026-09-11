@@ -81,6 +81,13 @@ function wireMocks() {
   walletModel.createWallet.mockImplementation(async (resellerId, balanceUsd) => {
     walletsByResellerId[resellerId] = { reseller_id: Number(resellerId), balance_usd: balanceUsd };
   });
+  walletModel.getWalletByResellerId.mockImplementation(async (resellerId, scopeFilter) => {
+    if (scopeFilter && scopeFilter.creator_id !== undefined && Number(scopeFilter.creator_id) !== Number(resellerId)) {
+      return null;
+    }
+    const wallet = walletsByResellerId[resellerId];
+    return wallet ? { ...wallet } : null;
+  });
   walletModel.adjustWalletBalance.mockImplementation(async (resellerId, deltaUsd) => {
     const wallet = walletsByResellerId[resellerId];
     if (!wallet) return false;
@@ -502,6 +509,63 @@ describe('Invoices (Phase 4, corrected)', () => {
       expect(res.body.sent_at).toBeNull(); // stale "sent" state must not survive a content change
 
       expect(ledgerEntries.find((e) => e.id === thirdEntry.id)).toMatchObject({ invoiced: 1, invoice_id: invoiceId });
+    });
+  });
+
+  describe('invoice totals are period-scoped, not tied to the live wallet balance', () => {
+    let reseller;
+    let invoice;
+    let periodEntriesTotal;
+
+    beforeAll(async () => {
+      reseller = await createReseller(adminAgent, {
+        username: `inv_periodscope_${Date.now()}`,
+        password: resellerPassword,
+        email: `inv_periodscope_${Date.now()}@example.com`,
+      });
+
+      seedRenewalDeduction(reseller.id, 12, 1, new Date(2025, 4, 5));
+      seedRenewalDeduction(reseller.id, 18, 2, new Date(2025, 4, 20));
+      periodEntriesTotal = 30; // 12 + 18
+
+      const createRes = await adminAgent
+        .post('/api/invoices')
+        .send({ resellerId: reseller.id, periodType: 'monthly', periodValue: '2025-05' });
+      expect(createRes.status).toBe(201);
+      expect(createRes.body.total_amount_usd).toBe(periodEntriesTotal);
+      invoice = createRes.body;
+    });
+
+    test("topping up the wallet after generation leaves the invoice's total unchanged", async () => {
+      const topupRes = await adminAgent
+        .post(`/api/resellers/${reseller.id}/wallet/topup`)
+        .send({ amount: 500 });
+      expect(topupRes.status).toBe(200);
+      expect(topupRes.body.balanceUsd).toBe(500); // the live balance did change...
+
+      const invoiceRes = await adminAgent.get(`/api/invoices/${invoice.id}/pdf`);
+      expect(invoiceRes.status).toBe(200); // ...but the invoice itself is unaffected by it
+
+      const stillListed = (await adminAgent.get('/api/invoices').query({ resellerId: reseller.id })).body.find(
+        (i) => i.id === invoice.id
+      );
+      expect(stillListed.total_amount_usd).toBe(periodEntriesTotal);
+    });
+
+    test("the invoice total still equals the sum of that period's renewal_deduction entries after the top-up", async () => {
+      const periodEntries = ledgerEntries.filter(
+        (e) =>
+          e.reseller_id === Number(reseller.id) &&
+          e.type === 'renewal_deduction' &&
+          e.created_at >= new Date(2025, 4, 1) &&
+          e.created_at < new Date(2025, 5, 1)
+      );
+      const expectedTotal = periodEntries.reduce((sum, e) => sum - Number(e.amount_usd), 0);
+      expect(expectedTotal).toBe(periodEntriesTotal);
+
+      const listRes = await adminAgent.get('/api/invoices').query({ resellerId: reseller.id });
+      const current = listRes.body.find((i) => i.id === invoice.id);
+      expect(current.total_amount_usd).toBe(expectedTotal);
     });
   });
 

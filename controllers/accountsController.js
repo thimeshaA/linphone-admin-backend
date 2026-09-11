@@ -30,6 +30,16 @@ function hashPassword(authid, domain, password) {
   return crypto.createHash('md5').update(`${authid}:${domain}:${password}`).digest('hex');
 }
 
+// balanceUsd can be negative (a renewal always proceeds regardless of
+// balance - see applyRenewalDeduction); `$${value.toFixed(2)}` would render
+// a negative one as "$-5.00" (sign in the wrong place) instead of the
+// standard "-$5.00", so the sign is pulled out and placed before the `$`.
+function formatUsd(amount) {
+  const value = Number(amount);
+  const sign = value < 0 ? '-' : '';
+  return `${sign}$${Math.abs(value).toFixed(2)}`;
+}
+
 function defaultExpiresAt() {
   const date = new Date();
   date.setMonth(date.getMonth() + 6);
@@ -249,7 +259,7 @@ async function requestAccounts(req, res) {
 async function notifyRenewalDeduction({ account, reseller, amountUsd, balanceUsd }) {
   const admins = await listAdminsByRole('admin');
   const subject = `Wallet charged for renewal of ${account.authid}@${account.domain}`;
-  const text = `Account ${account.authid}@${account.domain} was renewed. $${amountUsd.toFixed(2)} was deducted from ${reseller.username}'s wallet. New balance: $${balanceUsd.toFixed(2)}.`;
+  const text = `Account ${account.authid}@${account.domain} was renewed. ${formatUsd(amountUsd)} was deducted from ${reseller.username}'s wallet. New balance: ${formatUsd(balanceUsd)}.`;
 
   // { accountId, authid, domain, amountUsd, balanceUsd } - the frontend can use
   // accountId to deep-link into the account, and amountUsd/balanceUsd to render

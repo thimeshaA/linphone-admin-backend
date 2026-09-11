@@ -254,8 +254,15 @@ function renderPasswordChangedHtml({ username, changedAt }) {
   });
 }
 
+// A negative wallet balance is the one place this can receive a negative
+// amount (a fully-paid invoice/deduction total never is) - `${amount}`
+// interpolated straight after the `$` would render "$-5.00" (sign in the
+// wrong place) instead of the standard "-$5.00", so the sign is pulled out
+// and placed before the `$` explicitly.
 function formatUsd(amount) {
-  return `$${Number(amount).toFixed(2)}`;
+  const value = Number(amount);
+  const sign = value < 0 ? '-' : '';
+  return `${sign}$${Math.abs(value).toFixed(2)}`;
 }
 
 function renderRenewalDeductionHtml({ authid, domain, resellerUsername, amountUsd, balanceUsd }) {

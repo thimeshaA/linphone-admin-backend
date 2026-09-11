@@ -298,6 +298,147 @@ describe('Wallet / billing (Phase 1)', () => {
     });
   });
 
+  // At the $10 rate used above, -25 rounds to 3 the same way whether the
+  // implementation does Math.ceil or (buggy) Math.round, since 2.5 rounds up
+  // either way. -7 at $5 does not have that ambiguity - Math.round(1.4)
+  // would give 1, but the correct behavior (round up, never truncate) is 2 -
+  // so this is the sharper regression guard for "must round up, not just
+  // round".
+  describe('owed-accounts rounding at a $5 renewal cost', () => {
+    let reseller;
+
+    beforeAll(async () => {
+      reseller = await createReseller(adminAgent, {
+        username: `wallet_owed5_${Date.now()}`,
+        password: resellerPassword,
+        email: `wallet_owed5_${Date.now()}@example.com`,
+      });
+      await adminAgent.put('/api/settings/renewal-cost').send({ renewalCost: 5 });
+    });
+
+    test('a balance that divides evenly by the renewal cost (-$5 at $5) owes exactly 1', async () => {
+      walletsByResellerId[reseller.id].balance_usd = -5;
+      const res = await adminAgent.get(`/api/resellers/${reseller.id}/wallet`);
+      expect(res.body.owedAccounts).toBe(1);
+    });
+
+    test('a balance that does not divide evenly (-$7 at $5) rounds up to 2, not down to 1', async () => {
+      walletsByResellerId[reseller.id].balance_usd = -7;
+      const res = await adminAgent.get(`/api/resellers/${reseller.id}/wallet`);
+      expect(res.body.owedAccounts).toBe(2);
+    });
+  });
+
+  describe('paying down debt via top-up recalculates owed-accounts', () => {
+    let reseller;
+
+    beforeAll(async () => {
+      reseller = await createReseller(adminAgent, {
+        username: `wallet_paydown_${Date.now()}`,
+        password: resellerPassword,
+        email: `wallet_paydown_${Date.now()}@example.com`,
+      });
+      await adminAgent.put('/api/settings/renewal-cost').send({ renewalCost: 5 });
+    });
+
+    test('a top-up that exactly clears a negative balance brings owed-accounts to 0', async () => {
+      walletsByResellerId[reseller.id].balance_usd = -20;
+
+      const topupRes = await adminAgent
+        .post(`/api/resellers/${reseller.id}/wallet/topup`)
+        .send({ amount: 20 });
+      expect(topupRes.status).toBe(200);
+      expect(topupRes.body.balanceUsd).toBe(0);
+
+      const walletRes = await adminAgent.get(`/api/resellers/${reseller.id}/wallet`);
+      expect(walletRes.body.balanceUsd).toBe(0);
+      expect(walletRes.body.owedAccounts).toBe(0);
+    });
+
+    test('a partial top-up reduces owed-accounts to the exact recalculated number, not just "fewer than before"', async () => {
+      walletsByResellerId[reseller.id].balance_usd = -23; // ceil(23/5) = 5 owed
+
+      const before = await adminAgent.get(`/api/resellers/${reseller.id}/wallet`);
+      expect(before.body.owedAccounts).toBe(5);
+
+      const topupRes = await adminAgent
+        .post(`/api/resellers/${reseller.id}/wallet/topup`)
+        .send({ amount: 10 });
+      expect(topupRes.status).toBe(200);
+      expect(topupRes.body.balanceUsd).toBe(-13);
+
+      const after = await adminAgent.get(`/api/resellers/${reseller.id}/wallet`);
+      expect(after.body.balanceUsd).toBe(-13);
+      expect(after.body.owedAccounts).toBe(3); // ceil(13/5) = 3, exactly
+    });
+  });
+
+  describe('multi-reseller isolation with contrasting debt states', () => {
+    let debtReseller;
+    let clearReseller;
+
+    beforeAll(async () => {
+      debtReseller = await createReseller(adminAgent, {
+        username: `wallet_iso_debt_${Date.now()}`,
+        password: resellerPassword,
+        email: `wallet_iso_debt_${Date.now()}@example.com`,
+      });
+      clearReseller = await createReseller(adminAgent, {
+        username: `wallet_iso_clear_${Date.now()}`,
+        password: resellerPassword,
+        email: `wallet_iso_clear_${Date.now()}@example.com`,
+        initialCredit: 50,
+      });
+      await adminAgent.put('/api/settings/renewal-cost').send({ renewalCost: 5 });
+
+      walletsByResellerId[debtReseller.id].balance_usd = -17; // ceil(17/5) = 4 owed
+      ledgerEntries.push({
+        id: nextLedgerId++,
+        reseller_id: Number(debtReseller.id),
+        type: 'renewal_deduction',
+        amount_usd: -17,
+        related_account_id: null,
+        invoiced: 0,
+        invoice_id: null,
+        created_by: null,
+        note: null,
+        created_at: new Date(),
+      });
+    });
+
+    test("the in-debt reseller's balance and owed count never leak into the clear reseller's wallet", async () => {
+      const debtRes = await adminAgent.get(`/api/resellers/${debtReseller.id}/wallet`);
+      const clearRes = await adminAgent.get(`/api/resellers/${clearReseller.id}/wallet`);
+
+      expect(debtRes.body.balanceUsd).toBe(-17);
+      expect(debtRes.body.owedAccounts).toBe(4);
+
+      expect(clearRes.body.balanceUsd).toBe(50);
+      expect(clearRes.body.owedAccounts).toBe(0);
+    });
+
+    test("each reseller's ledger only contains their own entries", async () => {
+      const debtRes = await adminAgent.get(`/api/resellers/${debtReseller.id}/wallet`);
+      const clearRes = await adminAgent.get(`/api/resellers/${clearReseller.id}/wallet`);
+
+      expect(debtRes.body.ledger.every((e) => e.reseller_id === Number(debtReseller.id))).toBe(true);
+      expect(debtRes.body.ledger.some((e) => e.type === 'renewal_deduction')).toBe(true);
+
+      expect(clearRes.body.ledger.every((e) => e.reseller_id === Number(clearReseller.id))).toBe(true);
+      expect(clearRes.body.ledger.some((e) => e.type === 'renewal_deduction')).toBe(false);
+    });
+
+    test("as the in-debt reseller, fetching the clear reseller's wallet is rejected", async () => {
+      const debtAgent = request.agent(app);
+      await debtAgent
+        .post('/api/auth/login')
+        .send({ username: debtReseller.username, password: resellerPassword });
+
+      const res = await debtAgent.get(`/api/resellers/${clearReseller.id}/wallet`);
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('wallet access scoping', () => {
     let resellerA;
     let resellerB;

@@ -781,6 +781,76 @@ describe('Renewal wallet deduction (Phase 2)', () => {
     expect(walletsByResellerId[reseller.id].balance_usd).toBe(expectedBalance);
   });
 
+  // These two use their own dedicated reseller/account rather than the
+  // shared `reseller` above - both need to force an arbitrary starting
+  // balance directly, which would otherwise corrupt the ledger-vs-balance
+  // invariant just checked, and both trigger their own mail/notifications
+  // that would otherwise be mistaken for the shared reseller's by the
+  // "last call" assertions earlier in this block.
+  test('renewal is never blocked for insufficient funds - it succeeds and correctly extends expires_at even with a deeply negative balance', async () => {
+    const deepDebtReseller = await createReseller({
+      username: `deduct_deepdebt_${Date.now()}`,
+      email: `deduct_deepdebt_${Date.now()}@example.com`,
+    });
+    const deepDebtAccount = await createAccount({
+      authid: `deduct_deepdebt_account_${Date.now()}`,
+      resellerId: deepDebtReseller.id,
+    });
+    walletsByResellerId[deepDebtReseller.id].balance_usd = -100000;
+    const balanceBefore = walletsByResellerId[deepDebtReseller.id].balance_usd;
+
+    const newExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const res = await adminAgent
+      .patch(`/api/accounts/${deepDebtAccount.id}/renew`)
+      .send({ expires_at: newExpiresAt });
+
+    expect(res.status).toBe(200);
+    expect(res.body.expires_at).toBe(newExpiresAt);
+
+    // Never blocked - the deduction still goes through, pushing the balance
+    // even further negative rather than rejecting the renewal.
+    const walletRes = await adminAgent.get(`/api/resellers/${deepDebtReseller.id}/wallet`);
+    expect(walletRes.body.balanceUsd).toBeLessThan(balanceBefore);
+  });
+
+  test('a negative resulting balance renders correctly in both the email and the notification ("-$X.XX", never the garbled "$-X.XX")', async () => {
+    const negBalanceReseller = await createReseller({
+      username: `deduct_negfmt_${Date.now()}`,
+      email: `deduct_negfmt_${Date.now()}@example.com`,
+    });
+    const negBalanceAccount = await createAccount({
+      authid: `deduct_negfmt_account_${Date.now()}`,
+      resellerId: negBalanceReseller.id,
+    });
+    walletsByResellerId[negBalanceReseller.id].balance_usd = -8; // 8 + 15 = 23, cleanly negative after this renewal
+    mailer.sendMail.mockClear();
+    const notificationsBefore = notifications.length;
+
+    const res = await adminAgent.patch(`/api/accounts/${negBalanceAccount.id}/renew`).send({});
+    expect(res.status).toBe(200);
+
+    const walletRes = await adminAgent.get(`/api/resellers/${negBalanceReseller.id}/wallet`);
+    expect(walletRes.body.balanceUsd).toBe(-23);
+    const expectedBalanceStr = '-$23.00';
+
+    expect(mailer.sendMail).toHaveBeenCalledTimes(1);
+    const emailCall = mailer.sendMail.mock.calls[0][0];
+    expect(emailCall.text).toContain(expectedBalanceStr);
+    expect(emailCall.text).not.toMatch(/\$-/);
+    expect(emailCall.html).toContain(expectedBalanceStr);
+    expect(emailCall.html).not.toMatch(/\$-/);
+
+    // Exactly one notification row for the reseller and one for the admin -
+    // never more, never fewer.
+    const newNotifications = notifications.slice(notificationsBefore).filter((n) => n.type === 'renewal_deduction');
+    const resellerRows = newNotifications.filter((n) => n.recipient_id === negBalanceReseller.id);
+    const adminRows = newNotifications.filter((n) => n.recipient_id === TEST_ADMIN.id);
+    expect(resellerRows).toHaveLength(1);
+    expect(adminRows).toHaveLength(1);
+    expect(resellerRows[0].message).toContain(expectedBalanceStr);
+    expect(resellerRows[0].message).not.toMatch(/\$-/);
+  });
+
   describe('proportional pricing by renewal period', () => {
     let propReseller;
     let propAccount;
