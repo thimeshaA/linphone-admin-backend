@@ -52,6 +52,19 @@ function periodLabelFor(periodType, periodValue) {
   return period.error ? periodValue : period.label;
 }
 
+// e.g. "invoice-acme_reseller-2026-08.pdf" (monthly) or
+// "invoice-acme_reseller-2026.pdf" (annual) - human-identifiable by
+// reseller+period rather than the internal numeric id, and stable across
+// regenerations of the same reseller+period (replace, not a new id - see
+// create()). reseller.username is already filesystem/header-safe (validated
+// against /^[A-Za-z0-9._-]+$/ on creation - see utils/validators.js), so no
+// extra sanitizing is needed; falls back to the reseller id if the reseller
+// was since deleted.
+function invoiceFilename(invoice, reseller) {
+  const who = reseller ? reseller.username : `reseller-${invoice.reseller_id}`;
+  return `invoice-${who}-${invoice.period_value}.pdf`;
+}
+
 // A period's last calendar day - e.g. 2026-09-30 for monthly '2026-09',
 // 2026-12-31 for annual '2026' - derived from period.end (the half-open
 // upper bound resolvePeriod already produces for gathering ledger entries)
@@ -213,7 +226,7 @@ async function getPdf(req, res) {
   const lineItems = await buildInvoiceLineItems(invoice);
 
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="invoice-${invoice.id}.pdf"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${invoiceFilename(invoice, reseller)}"`);
   renderInvoicePdfToStream(res, invoice, reseller, periodLabel, lineItems);
 }
 
@@ -262,7 +275,7 @@ async function send(req, res) {
         periodLabel,
         totalAmountUsd: invoice.total_amount_usd,
       }),
-      attachments: [{ filename: `invoice-${invoice.id}.pdf`, content: pdfBuffer }],
+      attachments: [{ filename: invoiceFilename(invoice, reseller), content: pdfBuffer }],
     });
   } catch (err) {
     return res.status(502).json({ error: 'Failed to send invoice email' });
