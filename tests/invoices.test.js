@@ -102,6 +102,19 @@ function wireMocks() {
         .map((e) => ({ ...e }))
   );
 
+  walletLedgerModel.getRenewalDeductionsForResellerInPeriod.mockImplementation(
+    async (resellerId, periodStart, periodEnd) =>
+      ledgerEntries
+        .filter(
+          (e) =>
+            e.reseller_id === Number(resellerId) &&
+            e.type === 'renewal_deduction' &&
+            e.created_at >= periodStart &&
+            e.created_at < periodEnd
+        )
+        .map((e) => ({ ...e }))
+  );
+
   walletLedgerModel.linkLedgerEntriesToInvoice.mockImplementation(async (ids, invoiceId) => {
     ledgerEntries.forEach((e) => {
       if (ids.includes(e.id)) {
@@ -274,6 +287,7 @@ describe('Invoices (Phase 4, corrected)', () => {
     let julEntry;
     let otherResellerAugEntry;
     let firstMonthlyInvoiceId;
+    let firstAnnualInvoiceId;
 
     beforeAll(async () => {
       reseller = await createReseller(adminAgent, {
@@ -339,7 +353,7 @@ describe('Invoices (Phase 4, corrected)', () => {
       });
     });
 
-    test('an overlapping annual invoice only picks up entries not already claimed by the monthly one', async () => {
+    test('an overlapping annual invoice is a full-year rollup - includes months already claimed by a monthly invoice, without reassigning their ledger entries', async () => {
       // A new deduction elsewhere in 2026, created after the monthly invoice
       // above was already generated - still un-invoiced.
       const marEntry = seedRenewalDeduction(reseller.id, 40, 5, new Date(2026, 2, 15));
@@ -349,15 +363,46 @@ describe('Invoices (Phase 4, corrected)', () => {
         .send({ resellerId: reseller.id, periodType: 'annual', periodValue: '2026' });
 
       expect(res.status).toBe(201);
-      // julEntry (99) and marEntry (40) are both still un-invoiced and fall
-      // within calendar year 2026, so both are swept in here (139 total) -
-      // but augEntryOne/Two (25 total) are already claimed by the monthly
-      // invoice and must not be double-counted.
-      expect(res.body.total_amount_usd).toBe(139);
+      // Full-year total: augEntryOne+Two (25, already claimed by the monthly
+      // invoice) PLUS julEntry (99) and marEntry (40), still unclaimed -
+      // every renewal_deduction in 2026 counts toward the annual rollup
+      // (25 + 99 + 40 = 164), unlike a monthly invoice's claim-only total.
+      expect(res.body.total_amount_usd).toBe(164);
 
+      // Previously-unclaimed entries get freshly linked to this annual invoice...
       expect(ledgerEntries.find((e) => e.id === marEntry.id)).toMatchObject({ invoiced: 1, invoice_id: res.body.id });
       expect(ledgerEntries.find((e) => e.id === julEntry.id)).toMatchObject({ invoiced: 1, invoice_id: res.body.id });
-      expect(ledgerEntries.find((e) => e.id === augEntryOne.id).invoice_id).not.toBe(res.body.id);
+      // ...but entries already claimed by the monthly invoice stay linked
+      // there - the annual rollup counts them without taking ownership, so
+      // nothing is ever double-charged via wallet_ledger.
+      expect(ledgerEntries.find((e) => e.id === augEntryOne.id).invoice_id).toBe(firstMonthlyInvoiceId);
+      expect(ledgerEntries.find((e) => e.id === augEntryTwo.id).invoice_id).toBe(firstMonthlyInvoiceId);
+      firstAnnualInvoiceId = res.body.id;
+    });
+
+    test("the annual invoice's PDF renders successfully with the full-year line items, including the monthly-claimed entries", async () => {
+      const res = await adminAgent.get(`/api/invoices/${firstAnnualInvoiceId}/pdf`);
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/^application\/pdf/);
+    });
+
+    test('regenerating the annual invoice picks up a further new deduction without disturbing the monthly-claimed entries', async () => {
+      const decEntry = seedRenewalDeduction(reseller.id, 11, 6, new Date(2026, 11, 20));
+
+      const res = await adminAgent
+        .post('/api/invoices')
+        .send({ resellerId: reseller.id, periodType: 'annual', periodValue: '2026' });
+
+      expect(res.status).toBe(200); // replaced, same invoice id
+      expect(res.body.id).toBe(firstAnnualInvoiceId);
+      expect(res.body.total_amount_usd).toBe(175); // 164 + 11
+
+      expect(ledgerEntries.find((e) => e.id === decEntry.id)).toMatchObject({
+        invoiced: 1,
+        invoice_id: firstAnnualInvoiceId,
+      });
+      // Still untouched by the annual regeneration.
+      expect(ledgerEntries.find((e) => e.id === augEntryOne.id).invoice_id).toBe(firstMonthlyInvoiceId);
     });
 
     test('a period with no deductions still generates a zero-total invoice', async () => {

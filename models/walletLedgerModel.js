@@ -31,19 +31,41 @@ async function listLedgerForReseller(resellerId, { page, limit }) {
   return { rows, total: countRows[0].total };
 }
 
-// Backs invoice generation (POST /api/invoices): every renewal_deduction for
-// this reseller within the exact period, not yet claimed by another invoice.
-// The `invoiced = 0` filter is what makes overlapping-but-different periods
-// (e.g. a monthly invoice already cut, then an annual one for the same year)
-// never double-count the same entry - each entry can only ever belong to one
-// invoice. It does NOT protect against re-running the *same* period twice;
-// that's guarded separately at the invoice level (see
-// invoiceModel.findInvoiceByResellerAndPeriod) so a no-op regeneration can't
-// create an empty duplicate once everything in the period is already claimed.
+// Backs monthly invoice generation (POST /api/invoices): every
+// renewal_deduction for this reseller within the exact period, not yet
+// claimed by another invoice. The `invoiced = 0` filter is what makes
+// overlapping-but-different periods never double-*claim* the same entry -
+// each entry can only ever be linked to one invoice. It does NOT protect
+// against re-running the *same* period twice; that's guarded separately at
+// the invoice level (see invoiceModel.findInvoiceByResellerAndPeriod) so a
+// no-op regeneration can't create an empty duplicate once everything in the
+// period is already claimed.
+//
+// Annual invoices do NOT use this for their total/line items (see
+// getRenewalDeductionsForResellerInPeriod below) - they're a full-year
+// rollup that counts every entry in the year regardless of claim status.
 async function getUninvoicedRenewalDeductionsInPeriod(resellerId, periodStart, periodEnd) {
   const [rows] = await adminPool.query(
     `SELECT ${LEDGER_COLUMNS} FROM wallet_ledger
      WHERE reseller_id = ? AND type = 'renewal_deduction' AND invoiced = 0
+       AND created_at >= ? AND created_at < ?
+     ORDER BY created_at ASC`,
+    [resellerId, periodStart, periodEnd]
+  );
+  return rows;
+}
+
+// Backs annual invoices (POST /api/invoices and GET /api/invoices/:id/pdf
+// for period_type='annual'): every renewal_deduction for this reseller in
+// the year, regardless of whether a monthly invoice already claimed it. An
+// annual invoice is a full-year statement, not a claim on the remainder -
+// entries a monthly invoice already claimed stay linked to that monthly
+// invoice (see create() in invoicesController.js, which only links the
+// still-unclaimed subset to the annual invoice, never reassigns others).
+async function getRenewalDeductionsForResellerInPeriod(resellerId, periodStart, periodEnd) {
+  const [rows] = await adminPool.query(
+    `SELECT ${LEDGER_COLUMNS} FROM wallet_ledger
+     WHERE reseller_id = ? AND type = 'renewal_deduction'
        AND created_at >= ? AND created_at < ?
      ORDER BY created_at ASC`,
     [resellerId, periodStart, periodEnd]
@@ -129,6 +151,7 @@ module.exports = {
   createLedgerEntry,
   listLedgerForReseller,
   getUninvoicedRenewalDeductionsInPeriod,
+  getRenewalDeductionsForResellerInPeriod,
   linkLedgerEntriesToInvoice,
   unlinkLedgerEntriesFromInvoice,
   getLedgerEntriesForInvoice,
