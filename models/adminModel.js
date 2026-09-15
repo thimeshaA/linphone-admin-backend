@@ -116,19 +116,18 @@ async function getResellerById(id) {
 }
 
 async function createReseller({ username, passwordHash, expiresAt, email }) {
-  const [result] = await adminPool.query(
+  await adminPool.query(
     "INSERT INTO admins (username, password_hash, role, status, expires_at, email) VALUES (?, ?, 'reseller', 'active', ?, ?)",
     [username, passwordHash, expiresAt, email]
   );
-  return {
-    id: result.insertId,
-    username,
-    role: 'reseller',
-    status: 'active',
-    expires_at: expiresAt,
-    expired_at: null,
-    email,
-  };
+  // Re-fetch by username (unique table-wide) rather than trusting
+  // result.insertId, which only reflects AUTO_INCREMENT ids - admins.id is
+  // a UUID, so insertId would come back as 0.
+  const [rows] = await adminPool.query(
+    "SELECT id, username, role, status, expires_at, expired_at, email, created_at FROM admins WHERE username = ? AND role = 'reseller' LIMIT 1",
+    [username]
+  );
+  return rows[0];
 }
 
 async function renewReseller(id, expiresAt) {

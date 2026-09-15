@@ -2,18 +2,48 @@ const { adminPool } = require('../config/db');
 const { buildScopedWhereClause } = require('./walletModel');
 
 const LEDGER_COLUMNS =
-  'id, reseller_id, type, amount_usd, related_account_id, invoiced, invoice_id, created_by, note, created_at';
+  'id, reseller_id, type, amount_usd, related_account_id, account_sip_id, invoiced, invoice_id, created_by, note, created_at';
 
-async function createLedgerEntry({ resellerId, type, amountUsd, relatedAccountId, invoiceId, createdBy, note }) {
+async function createLedgerEntry({
+  resellerId,
+  type,
+  amountUsd,
+  relatedAccountId,
+  accountSipId,
+  invoiceId,
+  createdBy,
+  note,
+}) {
   const [result] = await adminPool.query(
-    'INSERT INTO wallet_ledger (reseller_id, type, amount_usd, related_account_id, invoice_id, created_by, note) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [resellerId, type, amountUsd, relatedAccountId ?? null, invoiceId ?? null, createdBy ?? null, note ?? null]
+    'INSERT INTO wallet_ledger (reseller_id, type, amount_usd, related_account_id, account_sip_id, invoice_id, created_by, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [
+      resellerId,
+      type,
+      amountUsd,
+      relatedAccountId ?? null,
+      accountSipId ?? null,
+      invoiceId ?? null,
+      createdBy ?? null,
+      note ?? null,
+    ]
   );
 
   const [rows] = await adminPool.query(`SELECT ${LEDGER_COLUMNS} FROM wallet_ledger WHERE id = ?`, [
     result.insertId,
   ]);
   return rows[0];
+}
+
+// Self-heals rows written before account_sip_id existed (or any other row
+// that somehow ended up without one): called from walletController.getWallet
+// whenever a returned row's account_sip_id is still NULL and its account
+// hasn't been deleted, so historical rows fill in the first time anyone
+// views that reseller's ledger - no separate backfill step required.
+async function backfillAccountSipId(id, accountSipId) {
+  await adminPool.query('UPDATE wallet_ledger SET account_sip_id = ? WHERE id = ? AND account_sip_id IS NULL', [
+    accountSipId,
+    id,
+  ]);
 }
 
 async function listLedgerForReseller(resellerId, { page, limit }) {
@@ -149,6 +179,7 @@ async function getBalancesAsOfByReseller(asOf) {
 
 module.exports = {
   createLedgerEntry,
+  backfillAccountSipId,
   listLedgerForReseller,
   getUninvoicedRenewalDeductionsInPeriod,
   getRenewalDeductionsForResellerInPeriod,

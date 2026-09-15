@@ -366,6 +366,7 @@ async function applyRenewalDeduction(account, actingAdminId, previousExpiresAt) 
     type: 'renewal_deduction',
     amountUsd,
     relatedAccountId: account.id,
+    accountSipId: `${account.authid}@${account.domain}`,
     createdBy: actingAdminId,
     note: null,
   });

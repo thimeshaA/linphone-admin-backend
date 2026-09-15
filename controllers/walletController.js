@@ -1,7 +1,8 @@
 const { getResellerById } = require('../models/adminModel');
 const { getWalletByResellerId, adjustWalletBalance } = require('../models/walletModel');
-const { createLedgerEntry, listLedgerForReseller } = require('../models/walletLedgerModel');
+const { createLedgerEntry, listLedgerForReseller, backfillAccountSipId } = require('../models/walletLedgerModel');
 const { getRenewalCost } = require('../models/settingsModel');
+const { findAccountLabelsByIds } = require('../models/accountModel');
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -19,6 +20,29 @@ function parsePagination(query) {
   return { page, limit };
 }
 
+// Rows written before account_sip_id existed have it NULL even though their
+// account may still exist. Rather than a one-off backfill script, heal them
+// here on read: look up the still-missing ones and persist the snapshot, so
+// every reseller's ledger fixes itself the first time it's viewed. Rows
+// whose account has since been hard-deleted (DELETE /accounts/:id) get no
+// match and stay NULL - same "Deleted account" fallback as today.
+async function healMissingAccountSipIds(rows) {
+  const toHeal = rows.filter((r) => r.account_sip_id === null && r.related_account_id !== null);
+  if (!toHeal.length) return;
+
+  const accountIds = [...new Set(toHeal.map((r) => r.related_account_id))];
+  const accountLabels = await findAccountLabelsByIds(accountIds);
+
+  await Promise.all(
+    toHeal.map(async (row) => {
+      const sipId = accountLabels[row.related_account_id];
+      if (!sipId) return;
+      row.account_sip_id = sipId;
+      await backfillAccountSipId(row.id, sipId);
+    })
+  );
+}
+
 async function getWallet(req, res) {
   const wallet = await getWalletByResellerId(req.params.id, req.scopeFilter);
   if (!wallet) {
@@ -30,6 +54,7 @@ async function getWallet(req, res) {
     getRenewalCost(),
     listLedgerForReseller(req.params.id, { page, limit }),
   ]);
+  await healMissingAccountSipIds(ledger.rows);
 
   return res.json({
     resellerId: wallet.reseller_id,
