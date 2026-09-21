@@ -1,3 +1,4 @@
+const { v4: uuidv4 } = require('uuid');
 const { flexisipPool } = require('../config/db');
 
 const PUBLIC_COLUMNS =
@@ -65,14 +66,14 @@ async function findAccountLabelsByIds(ids) {
 }
 
 async function createAccount({ authid, domain, passwordHash, status, expiresAt, creatorId, email }) {
-  const [result] = await flexisipPool.query(
-    'INSERT INTO auth_users (authid, domain, password, status, expires_at, creator_id, email) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [authid, domain, passwordHash, status, expiresAt, creatorId, email]
+  // auth_users.id is UUID, not AUTO_INCREMENT - the app must generate it.
+  const id = uuidv4();
+  await flexisipPool.query(
+    'INSERT INTO auth_users (id, authid, domain, password, status, expires_at, creator_id, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, authid, domain, passwordHash, status, expiresAt, creatorId, email]
   );
 
-  const [rows] = await flexisipPool.query(`SELECT ${PUBLIC_COLUMNS} FROM auth_users WHERE id = ?`, [
-    result.insertId,
-  ]);
+  const [rows] = await flexisipPool.query(`SELECT ${PUBLIC_COLUMNS} FROM auth_users WHERE id = ?`, [id]);
   return rows[0];
 }
 

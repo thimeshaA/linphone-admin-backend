@@ -1,3 +1,4 @@
+const { v4: uuidv4 } = require('uuid');
 const { adminPool } = require('../config/db');
 
 // Matches on username OR email so login accepts either interchangeably.
@@ -116,18 +117,13 @@ async function getResellerById(id) {
 }
 
 async function createReseller({ username, passwordHash, expiresAt, email }) {
+  // admins.id is UUID, not AUTO_INCREMENT - the app must generate it.
+  const id = uuidv4();
   await adminPool.query(
-    "INSERT INTO admins (username, password_hash, role, status, expires_at, email) VALUES (?, ?, 'reseller', 'active', ?, ?)",
-    [username, passwordHash, expiresAt, email]
+    "INSERT INTO admins (id, username, password_hash, role, status, expires_at, email) VALUES (?, ?, ?, 'reseller', 'active', ?, ?)",
+    [id, username, passwordHash, expiresAt, email]
   );
-  // Re-fetch by username (unique table-wide) rather than trusting
-  // result.insertId, which only reflects AUTO_INCREMENT ids - admins.id is
-  // a UUID, so insertId would come back as 0.
-  const [rows] = await adminPool.query(
-    "SELECT id, username, role, status, expires_at, expired_at, email, created_at FROM admins WHERE username = ? AND role = 'reseller' LIMIT 1",
-    [username]
-  );
-  return rows[0];
+  return getResellerById(id);
 }
 
 async function renewReseller(id, expiresAt) {

@@ -5,21 +5,22 @@ jest.mock('../config/db', () => ({
 const { adminPool } = require('../config/db');
 const { createReseller } = require('../models/adminModel');
 
-// admins.id is a UUID column, not AUTO_INCREMENT, so a real INSERT never
-// populates mysql2's result.insertId (it comes back as 0) - this fakes that
-// exact behavior to catch a regression where createReseller trusts insertId
-// instead of re-fetching the row it just created.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// admins.id is a UUID column, not AUTO_INCREMENT - the app generates the id
+// itself and must pass it into the INSERT rather than trusting mysql2's
+// result.insertId (which comes back as 0 for a non-AUTO_INCREMENT PK).
 describe('adminModel.createReseller', () => {
-  let adminsByUsername;
+  let adminsById;
 
   beforeEach(() => {
-    adminsByUsername = {};
+    adminsById = {};
 
     adminPool.query.mockImplementation(async (sql, params) => {
       if (sql.startsWith('INSERT INTO admins')) {
-        const [username, passwordHash, expiresAt, email] = params;
-        adminsByUsername[username] = {
-          id: 'a1b2c3d4-0000-4000-8000-000000000001',
+        const [id, username, passwordHash, expiresAt, email] = params;
+        adminsById[id] = {
+          id,
           username,
           password_hash: passwordHash,
           role: 'reseller',
@@ -33,8 +34,8 @@ describe('adminModel.createReseller', () => {
       }
 
       if (sql.startsWith('SELECT')) {
-        const [username] = params;
-        const row = adminsByUsername[username];
+        const [id] = params;
+        const row = adminsById[id];
         return [row ? [row] : []];
       }
 
@@ -42,7 +43,7 @@ describe('adminModel.createReseller', () => {
     });
   });
 
-  test('returns the real UUID id, not the fabricated insertId', async () => {
+  test('generates a UUID id and returns it, not the fabricated insertId', async () => {
     const reseller = await createReseller({
       username: 'acme_reseller',
       passwordHash: 'hashed',
@@ -50,7 +51,8 @@ describe('adminModel.createReseller', () => {
       email: 'acme@example.com',
     });
 
-    expect(reseller.id).toBe('a1b2c3d4-0000-4000-8000-000000000001');
+    expect(reseller.id).toMatch(UUID_RE);
     expect(reseller.id).not.toBe(0);
+    expect(reseller.username).toBe('acme_reseller');
   });
 });
