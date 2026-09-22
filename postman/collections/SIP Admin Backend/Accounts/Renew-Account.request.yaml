@@ -26,7 +26,7 @@ description: |-
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` - the numeric id of the SIP account to renew.
+  - **URL param:** `:id` - the UUID of the SIP account to renew.
   - **Optional body field:**
     - `expires_at` (ISO date string) - new expiry date. Defaults to +6 months from now if omitted or `null`.
 

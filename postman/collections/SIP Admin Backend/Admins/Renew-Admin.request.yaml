@@ -1,7 +1,7 @@
 $kind: http-request
 name: Renew Admin
 method: PATCH
-url: '{{baseUrl}}/api/admins/2/renew'
+url: '{{baseUrl}}/api/admins/3fa85f64-5717-4562-b3fc-2c963f66afa6/renew'
 order: 2006
 headers:
   - key: Content-Type
@@ -25,7 +25,7 @@ description: |-
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` - the numeric id of the reseller to renew.
+  - **URL param:** `:id` - the UUID of the reseller to renew.
   - **Optional body field:**
     - `expires_at` (ISO date string) - new expiry date. Defaults to +6 months from now if omitted or `null`.
 

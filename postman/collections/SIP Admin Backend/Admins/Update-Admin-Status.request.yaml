@@ -1,7 +1,7 @@
 $kind: http-request
 name: Update Admin Status
 method: PATCH
-url: '{{baseUrl}}/api/admins/2'
+url: '{{baseUrl}}/api/admins/3fa85f64-5717-4562-b3fc-2c963f66afa6'
 order: 2003
 headers:
   - key: Content-Type
@@ -25,7 +25,7 @@ description: |-
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` - the numeric id of the reseller to update.
+  - **URL param:** `:id` - the UUID of the reseller to update.
   - **Required body field:**
     - `status` (string) - must be `"active"` or `"disabled"`.
   - No other fields can be changed through this endpoint (no username, password, or role changes).

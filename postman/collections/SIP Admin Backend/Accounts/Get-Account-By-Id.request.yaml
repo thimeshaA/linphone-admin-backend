@@ -1,7 +1,7 @@
 $kind: http-request
 name: Get Account By Id
 method: GET
-url: '{{baseUrl}}/api/accounts/1'
+url: '{{baseUrl}}/api/accounts/3fa85f64-5717-4562-b3fc-2c963f66afa6'
 order: 1001
 description: |-
   ## Purpose
@@ -17,7 +17,7 @@ description: |-
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` - the numeric id of the SIP account to fetch.
+  - **URL param:** `:id` - the UUID of the SIP account to fetch.
   - No body or query params.
 
   ## Responses

@@ -26,7 +26,7 @@ description: |-
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` - the numeric id of the SIP account to disable.
+  - **URL param:** `:id` - the UUID of the SIP account to disable.
   - No body fields are required; the `disabled_at` timestamp is set server-side.
 
   ## Responses

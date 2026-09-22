@@ -10,7 +10,7 @@ body:
   type: json
   content: |-
     {
-      "resellerId": 1
+      "resellerId": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
     }
 description: |-
   ## Purpose
@@ -25,9 +25,9 @@ description: |-
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` - the numeric id of the SIP account to reassign.
+  - **URL param:** `:id` - the UUID of the SIP account to reassign.
   - **Required body field:**
-    - `resellerId` (integer) - the id of the `admins` row that will take ownership. Must reference an existing row with `role = 'reseller'`; validated identically to Create Account.
+    - `resellerId` (string, UUID) - the id of the `admins` row that will take ownership. Must reference an existing row with `role = 'reseller'`; validated identically to Create Account.
 
   ## Responses
   - **200 OK** - account reassigned; the full updated account object is returned, with `creator_id` reflecting the new owner.

@@ -16,7 +16,7 @@ body:
       "email": "customer@example.com",
       "status": "active",
       "expires_at": null,
-      "resellerId": 1
+      "resellerId": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
     }
 description: |-
   ## Purpose
@@ -36,7 +36,7 @@ description: |-
     - `domain` (string) - SIP domain, e.g. `"sip.example.com"`.
     - `password` (string) - plaintext password; hashed server-side as `MD5(authid:domain:password)`.
     - `email` (string) - valid contact email; stored on the account and used to send the credentials email below. Not required to be unique - multiple accounts may share the same contact email.
-    - `resellerId` (integer) - the id of the `admins` row that will own this account. Must reference an existing row with `role = 'reseller'`; validated the same way for both this endpoint and Reassign Account.
+    - `resellerId` (string, UUID) - the id of the `admins` row that will own this account. Must reference an existing row with `role = 'reseller'`; validated the same way for both this endpoint and Reassign Account.
   - **Optional body fields:**
     - `expires_at` (ISO date string) - account expiry date; defaults to +6 months from now if omitted.
 

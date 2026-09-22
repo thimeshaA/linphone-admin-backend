@@ -1,7 +1,7 @@
 $kind: http-request
 name: Top Up Reseller Wallet
 method: POST
-url: '{{baseUrl}}/api/resellers/2/wallet/topup'
+url: '{{baseUrl}}/api/resellers/3fa85f64-5717-4562-b3fc-2c963f66afa6/wallet/topup'
 order: 1001
 headers:
   - key: Content-Type
@@ -26,14 +26,14 @@ description: |-
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` - the numeric id of the reseller to credit.
+  - **URL param:** `:id` - the UUID of the reseller to credit.
   - **Required body field:**
     - `amount` (number) - must be a positive number.
   - **Optional body field:**
     - `note` (string) - free-text note stored on the ledger entry.
 
   ## Responses
-  - **200 OK** - `{ "resellerId": number, "balanceUsd": number }` reflecting the new balance.
+  - **200 OK** - `{ "resellerId": "uuid", "balanceUsd": number }` reflecting the new balance.
   - **400 Bad Request** - `amount` is missing, not a number, or not positive.
   - **404 Not Found** - no reseller with that id exists.
   - **403 Forbidden** - caller is a reseller.

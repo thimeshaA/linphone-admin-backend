@@ -16,7 +16,7 @@ description: |-
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` - the numeric id of the SIP account to delete.
+  - **URL param:** `:id` - the UUID of the SIP account to delete.
   - No body or query params.
 
   ## Responses

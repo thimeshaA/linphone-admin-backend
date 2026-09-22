@@ -5,7 +5,7 @@ url: '{{baseUrl}}/api/invoices'
 order: 1003
 params:
   - key: resellerId
-    value: '2'
+    value: '3fa85f64-5717-4562-b3fc-2c963f66afa6'
     disabled: true
     description: 'Admin-only filter: only invoices for this reseller'
 description: |-
@@ -25,7 +25,7 @@ description: |-
   - **Optional query param:** `?resellerId=` - admin-only filter to one reseller's invoices.
 
   ## Responses
-  - **200 OK** - an array of invoices: `[ { "id": number, "reseller_id": number, "period_type": "monthly", "period_value": "2026-08", "total_amount_usd": number, "created_at": "...", "sent_at": "...|null" } ]`.
+  - **200 OK** - an array of invoices: `[ { "id": number, "reseller_id": "uuid", "period_type": "monthly", "period_value": "2026-08", "total_amount_usd": number, "created_at": "...", "sent_at": "...|null" } ]`.
   - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes

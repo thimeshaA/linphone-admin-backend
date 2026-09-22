@@ -1,7 +1,7 @@
 $kind: http-request
 name: Get Reseller Wallet
 method: GET
-url: '{{baseUrl}}/api/resellers/2/wallet'
+url: '{{baseUrl}}/api/resellers/3fa85f64-5717-4562-b3fc-2c963f66afa6/wallet'
 order: 1000
 params:
   - key: page
@@ -26,7 +26,7 @@ description: |-
   - Returns **401** if the auth cookie is missing, invalid, or expired.
 
   ## Request Requirements
-  - **URL param:** `:id` - the numeric id of the reseller whose wallet to fetch.
+  - **URL param:** `:id` - the UUID of the reseller whose wallet to fetch.
   - **Optional query params:**
     - `?page=` - ledger page number (default `1`).
     - `?limit=` - ledger page size, max `100` (default `20`).
@@ -35,7 +35,7 @@ description: |-
   - **200 OK** -
     ```json
     {
-      "resellerId": 2,
+      "resellerId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
       "balanceUsd": -25,
       "owedAccounts": 3,
       "updatedAt": "2026-09-09T00:00:00.000Z",
