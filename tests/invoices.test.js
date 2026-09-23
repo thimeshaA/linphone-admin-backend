@@ -95,20 +95,6 @@ function wireMocks() {
     return true;
   });
 
-  walletLedgerModel.getUninvoicedRenewalDeductionsInPeriod.mockImplementation(
-    async (resellerId, periodStart, periodEnd) =>
-      ledgerEntries
-        .filter(
-          (e) =>
-            e.reseller_id === Number(resellerId) &&
-            e.type === 'renewal_deduction' &&
-            !e.invoiced &&
-            e.created_at >= periodStart &&
-            e.created_at < periodEnd
-        )
-        .map((e) => ({ ...e }))
-  );
-
   walletLedgerModel.getRenewalDeductionsForResellerInPeriod.mockImplementation(
     async (resellerId, periodStart, periodEnd) =>
       ledgerEntries
@@ -120,30 +106,6 @@ function wireMocks() {
             e.created_at < periodEnd
         )
         .map((e) => ({ ...e }))
-  );
-
-  walletLedgerModel.linkLedgerEntriesToInvoice.mockImplementation(async (ids, invoiceId) => {
-    ledgerEntries.forEach((e) => {
-      if (ids.includes(e.id)) {
-        e.invoiced = 1;
-        e.invoice_id = invoiceId;
-      }
-    });
-  });
-
-  walletLedgerModel.unlinkLedgerEntriesFromInvoice.mockImplementation(async (invoiceId) => {
-    ledgerEntries.forEach((e) => {
-      if (e.invoice_id === invoiceId) {
-        e.invoiced = 0;
-        e.invoice_id = null;
-      }
-    });
-  });
-
-  walletLedgerModel.getLedgerEntriesForInvoice.mockImplementation(async (invoiceId) =>
-    ledgerEntries
-      .filter((e) => e.invoice_id === invoiceId && e.type === 'renewal_deduction')
-      .map((e) => ({ ...e }))
   );
 
   invoiceModel.findInvoiceByResellerAndPeriod.mockImplementation(async (resellerId, periodType, periodValue) => {
@@ -289,10 +251,6 @@ describe('Invoices (Phase 4, corrected)', () => {
   describe('generating an invoice for a period', () => {
     let reseller;
     let otherReseller;
-    let augEntryOne;
-    let augEntryTwo;
-    let julEntry;
-    let otherResellerAugEntry;
     let firstMonthlyInvoiceId;
     let firstAnnualInvoiceId;
 
@@ -308,12 +266,12 @@ describe('Invoices (Phase 4, corrected)', () => {
         email: `inv_gen_other_${Date.now()}@example.com`,
       });
 
-      augEntryOne = seedRenewalDeduction(reseller.id, 10, 1, new Date(2026, 7, 5));
-      augEntryTwo = seedRenewalDeduction(reseller.id, 15, 2, new Date(2026, 7, 20));
+      seedRenewalDeduction(reseller.id, 10, 1, new Date(2026, 7, 5));
+      seedRenewalDeduction(reseller.id, 15, 2, new Date(2026, 7, 20));
       // Outside the August period entirely - must never be pulled into it.
-      julEntry = seedRenewalDeduction(reseller.id, 99, 3, new Date(2026, 6, 31));
+      seedRenewalDeduction(reseller.id, 99, 3, new Date(2026, 6, 31));
       // Belongs to a different reseller, same period - must never leak across resellers.
-      otherResellerAugEntry = seedRenewalDeduction(otherReseller.id, 50, 4, new Date(2026, 7, 10));
+      seedRenewalDeduction(otherReseller.id, 50, 4, new Date(2026, 7, 10));
     });
 
     test('sums only that reseller\'s deductions within the exact period', async () => {
@@ -328,14 +286,6 @@ describe('Invoices (Phase 4, corrected)', () => {
       expect(res.body.total_amount_usd).toBe(25); // 10 + 15, not the July or other-reseller entries
       expect(res.body.sent_at).toBeNull();
       firstMonthlyInvoiceId = res.body.id;
-
-      expect(ledgerEntries.find((e) => e.id === augEntryOne.id)).toMatchObject({ invoiced: 1, invoice_id: res.body.id });
-      expect(ledgerEntries.find((e) => e.id === augEntryTwo.id)).toMatchObject({ invoiced: 1, invoice_id: res.body.id });
-      expect(ledgerEntries.find((e) => e.id === julEntry.id)).toMatchObject({ invoiced: 0, invoice_id: null });
-      expect(ledgerEntries.find((e) => e.id === otherResellerAugEntry.id)).toMatchObject({
-        invoiced: 0,
-        invoice_id: null,
-      });
     });
 
     test('regenerating the exact same reseller+period replaces the existing invoice instead of rejecting or duplicating', async () => {
@@ -349,52 +299,41 @@ describe('Invoices (Phase 4, corrected)', () => {
       expect(res.body.id).toBe(firstMonthlyInvoiceId);
       expect(res.body.total_amount_usd).toBe(25); // no new deductions since the first generation
       expect(Object.keys(invoicesById).length).toBe(before); // no duplicate invoice row
-
-      expect(ledgerEntries.find((e) => e.id === augEntryOne.id)).toMatchObject({
-        invoiced: 1,
-        invoice_id: firstMonthlyInvoiceId,
-      });
-      expect(ledgerEntries.find((e) => e.id === augEntryTwo.id)).toMatchObject({
-        invoiced: 1,
-        invoice_id: firstMonthlyInvoiceId,
-      });
     });
 
-    test('an overlapping annual invoice is a full-year rollup - includes months already claimed by a monthly invoice, without reassigning their ledger entries', async () => {
+    test('an annual invoice is a full-year rollup that includes months already covered by a monthly invoice - both independently reflect the same entries', async () => {
       // A new deduction elsewhere in 2026, created after the monthly invoice
-      // above was already generated - still un-invoiced.
-      const marEntry = seedRenewalDeduction(reseller.id, 40, 5, new Date(2026, 2, 15));
+      // above was already generated.
+      seedRenewalDeduction(reseller.id, 40, 5, new Date(2026, 2, 15));
 
       const res = await adminAgent
         .post('/api/invoices')
         .send({ resellerId: reseller.id, periodType: 'annual', periodValue: '2026' });
 
       expect(res.status).toBe(201);
-      // Full-year total: augEntryOne+Two (25, already claimed by the monthly
-      // invoice) PLUS julEntry (99) and marEntry (40), still unclaimed -
-      // every renewal_deduction in 2026 counts toward the annual rollup
-      // (25 + 99 + 40 = 164), unlike a monthly invoice's claim-only total.
+      // Full-year total: augEntryOne+Two (25, also on the monthly invoice)
+      // plus julEntry (99) and marEntry (40) - every renewal_deduction in
+      // 2026 counts toward the annual rollup (25 + 99 + 40 = 164). Nothing
+      // is excluded because a monthly invoice already covers part of it -
+      // the wallet was only ever debited once, so both invoices statement
+      // the same underlying activity with no double-billing risk.
       expect(res.body.total_amount_usd).toBe(164);
-
-      // Previously-unclaimed entries get freshly linked to this annual invoice...
-      expect(ledgerEntries.find((e) => e.id === marEntry.id)).toMatchObject({ invoiced: 1, invoice_id: res.body.id });
-      expect(ledgerEntries.find((e) => e.id === julEntry.id)).toMatchObject({ invoiced: 1, invoice_id: res.body.id });
-      // ...but entries already claimed by the monthly invoice stay linked
-      // there - the annual rollup counts them without taking ownership, so
-      // nothing is ever double-charged via wallet_ledger.
-      expect(ledgerEntries.find((e) => e.id === augEntryOne.id).invoice_id).toBe(firstMonthlyInvoiceId);
-      expect(ledgerEntries.find((e) => e.id === augEntryTwo.id).invoice_id).toBe(firstMonthlyInvoiceId);
       firstAnnualInvoiceId = res.body.id;
+
+      // The August monthly invoice is untouched by generating the annual one.
+      const monthlyRes = await adminAgent.get('/api/invoices').query({ resellerId: reseller.id });
+      const monthlyInvoice = monthlyRes.body.find((inv) => inv.id === firstMonthlyInvoiceId);
+      expect(monthlyInvoice.total_amount_usd).toBe(25);
     });
 
-    test("the annual invoice's PDF renders successfully with the full-year line items, including the monthly-claimed entries", async () => {
+    test("the annual invoice's PDF renders successfully with the full-year line items, including entries a monthly invoice also covers", async () => {
       const res = await adminAgent.get(`/api/invoices/${firstAnnualInvoiceId}/pdf`);
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/^application\/pdf/);
     });
 
-    test('regenerating the annual invoice picks up a further new deduction without disturbing the monthly-claimed entries', async () => {
-      const decEntry = seedRenewalDeduction(reseller.id, 11, 6, new Date(2026, 11, 20));
+    test('regenerating the annual invoice picks up a further new deduction without disturbing the monthly invoice', async () => {
+      seedRenewalDeduction(reseller.id, 11, 6, new Date(2026, 11, 20));
 
       const res = await adminAgent
         .post('/api/invoices')
@@ -404,12 +343,9 @@ describe('Invoices (Phase 4, corrected)', () => {
       expect(res.body.id).toBe(firstAnnualInvoiceId);
       expect(res.body.total_amount_usd).toBe(175); // 164 + 11
 
-      expect(ledgerEntries.find((e) => e.id === decEntry.id)).toMatchObject({
-        invoiced: 1,
-        invoice_id: firstAnnualInvoiceId,
-      });
-      // Still untouched by the annual regeneration.
-      expect(ledgerEntries.find((e) => e.id === augEntryOne.id).invoice_id).toBe(firstMonthlyInvoiceId);
+      const monthlyRes = await adminAgent.get('/api/invoices').query({ resellerId: reseller.id });
+      const monthlyInvoice = monthlyRes.body.find((inv) => inv.id === firstMonthlyInvoiceId);
+      expect(monthlyInvoice.total_amount_usd).toBe(25); // still untouched by the annual regeneration
     });
 
     test('a period with no deductions still generates a zero-total invoice', async () => {
@@ -447,7 +383,6 @@ describe('Invoices (Phase 4, corrected)', () => {
   describe('regenerating an existing invoice', () => {
     let reseller;
     let invoiceId;
-    let firstEntry;
 
     beforeAll(async () => {
       reseller = await createReseller(adminAgent, {
@@ -456,7 +391,7 @@ describe('Invoices (Phase 4, corrected)', () => {
         email: `inv_regen_${Date.now()}@example.com`,
       });
 
-      firstEntry = seedRenewalDeduction(reseller.id, 20, 1, new Date(2026, 6, 3));
+      seedRenewalDeduction(reseller.id, 20, 1, new Date(2026, 6, 3));
       const createRes = await adminAgent
         .post('/api/invoices')
         .send({ resellerId: reseller.id, periodType: 'monthly', periodValue: '2026-07' });
@@ -466,7 +401,7 @@ describe('Invoices (Phase 4, corrected)', () => {
 
     test('picks up a new deduction recorded since the first generation, on the same invoice id', async () => {
       const before = Object.keys(invoicesById).length;
-      const secondEntry = seedRenewalDeduction(reseller.id, 8, 2, new Date(2026, 6, 15));
+      seedRenewalDeduction(reseller.id, 8, 2, new Date(2026, 6, 15));
 
       const res = await adminAgent
         .post('/api/invoices')
@@ -476,15 +411,6 @@ describe('Invoices (Phase 4, corrected)', () => {
       expect(res.body.id).toBe(invoiceId);
       expect(res.body.total_amount_usd).toBe(28); // 20 + 8
       expect(Object.keys(invoicesById).length).toBe(before); // still no duplicate row
-
-      // Every entry for this reseller+period ends up linked to exactly this
-      // one invoice - never left unlinked, never double-linked elsewhere.
-      expect(ledgerEntries.find((e) => e.id === firstEntry.id)).toMatchObject({ invoiced: 1, invoice_id: invoiceId });
-      expect(ledgerEntries.find((e) => e.id === secondEntry.id)).toMatchObject({ invoiced: 1, invoice_id: invoiceId });
-      const linkedElsewhere = ledgerEntries.filter(
-        (e) => e.reseller_id === reseller.id && e.invoice_id !== null && e.invoice_id !== invoiceId
-      );
-      expect(linkedElsewhere).toHaveLength(0);
     });
 
     test('regenerating a sent invoice replaces its total and resets sent_at to NULL', async () => {
@@ -497,7 +423,7 @@ describe('Invoices (Phase 4, corrected)', () => {
       // for that one.
       mailer.sendMail.mockClear();
 
-      const thirdEntry = seedRenewalDeduction(reseller.id, 12, 3, new Date(2026, 6, 22));
+      seedRenewalDeduction(reseller.id, 12, 3, new Date(2026, 6, 22));
 
       const res = await adminAgent
         .post('/api/invoices')
@@ -507,8 +433,6 @@ describe('Invoices (Phase 4, corrected)', () => {
       expect(res.body.id).toBe(invoiceId);
       expect(res.body.total_amount_usd).toBe(40); // 20 + 8 + 12
       expect(res.body.sent_at).toBeNull(); // stale "sent" state must not survive a content change
-
-      expect(ledgerEntries.find((e) => e.id === thirdEntry.id)).toMatchObject({ invoiced: 1, invoice_id: invoiceId });
     });
   });
 

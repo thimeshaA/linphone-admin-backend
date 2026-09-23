@@ -61,37 +61,17 @@ async function listLedgerForReseller(resellerId, { page, limit }) {
   return { rows, total: countRows[0].total };
 }
 
-// Backs monthly invoice generation (POST /api/invoices): every
-// renewal_deduction for this reseller within the exact period, not yet
-// claimed by another invoice. The `invoiced = 0` filter is what makes
-// overlapping-but-different periods never double-*claim* the same entry -
-// each entry can only ever be linked to one invoice. It does NOT protect
-// against re-running the *same* period twice; that's guarded separately at
-// the invoice level (see invoiceModel.findInvoiceByResellerAndPeriod) so a
-// no-op regeneration can't create an empty duplicate once everything in the
-// period is already claimed.
-//
-// Annual invoices do NOT use this for their total/line items (see
-// getRenewalDeductionsForResellerInPeriod below) - they're a full-year
-// rollup that counts every entry in the year regardless of claim status.
-async function getUninvoicedRenewalDeductionsInPeriod(resellerId, periodStart, periodEnd) {
-  const [rows] = await adminPool.query(
-    `SELECT ${LEDGER_COLUMNS} FROM wallet_ledger
-     WHERE reseller_id = ? AND type = 'renewal_deduction' AND invoiced = 0
-       AND created_at >= ? AND created_at < ?
-     ORDER BY created_at ASC`,
-    [resellerId, periodStart, periodEnd]
-  );
-  return rows;
-}
-
-// Backs annual invoices (POST /api/invoices and GET /api/invoices/:id/pdf
-// for period_type='annual'): every renewal_deduction for this reseller in
-// the year, regardless of whether a monthly invoice already claimed it. An
-// annual invoice is a full-year statement, not a claim on the remainder -
-// entries a monthly invoice already claimed stay linked to that monthly
-// invoice (see create() in invoicesController.js, which only links the
-// still-unclaimed subset to the annual invoice, never reassigns others).
+// Backs invoice generation (POST /api/invoices and GET /api/invoices/:id/pdf,
+// both monthly and annual): every renewal_deduction for this reseller within
+// the exact period, regardless of whether some other invoice already covers
+// it. A wallet_ledger entry is never "claimed" by one invoice to the
+// exclusion of another - the wallet was already debited once at renewal
+// time (see applyRenewalDeduction), so an invoice is just a statement of
+// that period's activity, and the same entry legitimately appears on both
+// its month's invoice and that year's annual invoice with no double-billing
+// risk. Regenerating an invoice (see invoicesController.create) always
+// recomputes fresh from this, so it reflects everything recorded as of that
+// moment.
 async function getRenewalDeductionsForResellerInPeriod(resellerId, periodStart, periodEnd) {
   const [rows] = await adminPool.query(
     `SELECT ${LEDGER_COLUMNS} FROM wallet_ledger
@@ -99,35 +79,6 @@ async function getRenewalDeductionsForResellerInPeriod(resellerId, periodStart, 
        AND created_at >= ? AND created_at < ?
      ORDER BY created_at ASC`,
     [resellerId, periodStart, periodEnd]
-  );
-  return rows;
-}
-
-async function linkLedgerEntriesToInvoice(ids, invoiceId) {
-  if (!ids.length) return;
-  await adminPool.query(
-    `UPDATE wallet_ledger SET invoiced = 1, invoice_id = ? WHERE id IN (${ids.map(() => '?').join(',')})`,
-    [invoiceId, ...ids]
-  );
-}
-
-// Backs invoice regeneration (POST /api/invoices replacing an existing
-// invoice for the same reseller+period): releases every entry currently
-// claimed by that invoice back to unclaimed (invoiced = 0, invoice_id NULL)
-// so getUninvoicedRenewalDeductionsInPeriod can freshly re-gather the full
-// set for the period - the released entries plus any new renewals recorded
-// since the invoice was first generated - rather than leaving them claimed
-// by an invoice that's about to be recomputed.
-async function unlinkLedgerEntriesFromInvoice(invoiceId) {
-  await adminPool.query('UPDATE wallet_ledger SET invoiced = 0, invoice_id = NULL WHERE invoice_id = ?', [
-    invoiceId,
-  ]);
-}
-
-async function getLedgerEntriesForInvoice(invoiceId) {
-  const [rows] = await adminPool.query(
-    `SELECT ${LEDGER_COLUMNS} FROM wallet_ledger WHERE invoice_id = ? AND type = 'renewal_deduction' ORDER BY created_at ASC`,
-    [invoiceId]
   );
   return rows;
 }
@@ -177,17 +128,31 @@ async function getBalancesAsOfByReseller(asOf) {
   return rows;
 }
 
+// Backs the reports' billing statement: every ledger entry in the scope+
+// period, oldest first, so a report can render an actual itemized statement
+// (with a running balance) rather than only the pre-aggregated totals above -
+// every figure in the billing section should be traceable back to real rows
+// here, never a number that only exists as a separate computation.
+async function getLedgerEntriesInPeriod(scopeFilter, periodStart, periodEnd) {
+  const { condition, params } = buildScopedWhereClause(scopeFilter);
+  const [rows] = await adminPool.query(
+    `SELECT id, reseller_id, type, amount_usd, related_account_id, account_sip_id, note, created_at
+     FROM wallet_ledger
+     WHERE ${condition} AND created_at >= ? AND created_at < ?
+     ORDER BY created_at ASC, id ASC`,
+    [...params, periodStart, periodEnd]
+  );
+  return rows;
+}
+
 module.exports = {
   createLedgerEntry,
   backfillAccountSipId,
   listLedgerForReseller,
-  getUninvoicedRenewalDeductionsInPeriod,
   getRenewalDeductionsForResellerInPeriod,
-  linkLedgerEntriesToInvoice,
-  unlinkLedgerEntriesFromInvoice,
-  getLedgerEntriesForInvoice,
   getLedgerTotalsByType,
   getLedgerTotalsByTypeAndReseller,
   getBalanceAsOf,
   getBalancesAsOfByReseller,
+  getLedgerEntriesInPeriod,
 };

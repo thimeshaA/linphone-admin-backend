@@ -1,13 +1,7 @@
 const { PassThrough } = require('stream');
 const { getResellerById } = require('../models/adminModel');
 const { findAccountLabelsByIds } = require('../models/accountModel');
-const {
-  getUninvoicedRenewalDeductionsInPeriod,
-  getRenewalDeductionsForResellerInPeriod,
-  linkLedgerEntriesToInvoice,
-  unlinkLedgerEntriesFromInvoice,
-  getLedgerEntriesForInvoice,
-} = require('../models/walletLedgerModel');
+const { getRenewalDeductionsForResellerInPeriod } = require('../models/walletLedgerModel');
 const {
   findInvoiceByResellerAndPeriod,
   createInvoice,
@@ -111,79 +105,38 @@ async function create(req, res) {
 
   const existing = await findInvoiceByResellerAndPeriod(resellerId, periodType, periodValue);
 
-  // Annual invoices are a full-year rollup, not a claim on the remainder:
-  // the total and line items cover every renewal_deduction in the year,
-  // including ones a monthly invoice already claimed. Those stay linked to
-  // that monthly invoice - only the currently-unclaimed entries get linked
-  // to this annual invoice, so nothing is ever double-charged via
-  // wallet_ledger even though the annual total counts it. This is
-  // deliberately asymmetric with monthly invoices below (see
-  // buildInvoiceLineItems for the matching read-side behavior).
-  if (periodType === 'annual') {
-    const allEntries = await getRenewalDeductionsForResellerInPeriod(resellerId, period.start, period.end);
-    // amount_usd is stored negative for deductions (see applyRenewalDeduction);
-    // the invoice total owed is the positive sum.
-    const totalAmountUsd = allEntries.reduce((sum, e) => sum - Number(e.amount_usd), 0);
-    const unclaimedEntries = allEntries.filter((e) => !e.invoiced);
-
-    if (existing) {
-      const invoice = await replaceInvoiceContents(existing.id, totalAmountUsd);
-      await linkLedgerEntriesToInvoice(unclaimedEntries.map((e) => e.id), existing.id);
-      return res.status(200).json(invoice);
-    }
-
-    const invoice = await createInvoice({ resellerId, periodType, periodValue, totalAmountUsd });
-    await linkLedgerEntriesToInvoice(unclaimedEntries.map((e) => e.id), invoice.id);
-    return res.status(201).json(invoice);
-  }
-
-  // Monthly: an invoice is one document per reseller per exact period (see
-  // the unique constraint in sql/invoices.sql) - but re-running the same
-  // period is no longer rejected. Instead the existing invoice is replaced:
-  // its old ledger entries are released, the full unclaimed set for the
-  // period is regathered (the released entries plus anything new since the
-  // last generation), and the invoice is recomputed and re-linked in place.
-  // sent_at is reset to NULL since a previously-emailed version no longer
-  // matches this content.
-  if (existing) {
-    await unlinkLedgerEntriesFromInvoice(existing.id);
-
-    const entries = await getUninvoicedRenewalDeductionsInPeriod(resellerId, period.start, period.end);
-    // amount_usd is stored negative for deductions (see applyRenewalDeduction);
-    // the invoice total owed is the positive sum.
-    const totalAmountUsd = entries.reduce((sum, e) => sum - Number(e.amount_usd), 0);
-
-    const invoice = await replaceInvoiceContents(existing.id, totalAmountUsd);
-    await linkLedgerEntriesToInvoice(entries.map((e) => e.id), existing.id);
-
-    return res.status(200).json(invoice);
-  }
-
-  const entries = await getUninvoicedRenewalDeductionsInPeriod(resellerId, period.start, period.end);
+  // Every invoice - monthly or annual - is a full statement of every
+  // renewal_deduction within its own period, recomputed fresh on each
+  // (re)generation. The wallet was already debited once at renewal time (see
+  // applyRenewalDeduction), so an invoice is purely a statement of that
+  // period's activity, not a new charge - the same entry legitimately
+  // appears on both its month's invoice and that year's annual invoice, with
+  // no double-billing risk. A reseller has at most one invoice per exact
+  // period (see the unique constraint in sql/invoices.sql); re-running the
+  // same period replaces the existing invoice's total in place rather than
+  // rejecting or duplicating, and resets sent_at to NULL since a
+  // previously-emailed version no longer matches this content.
+  const entries = await getRenewalDeductionsForResellerInPeriod(resellerId, period.start, period.end);
   // amount_usd is stored negative for deductions (see applyRenewalDeduction);
   // the invoice total owed is the positive sum.
   const totalAmountUsd = entries.reduce((sum, e) => sum - Number(e.amount_usd), 0);
 
-  const invoice = await createInvoice({ resellerId, periodType, periodValue, totalAmountUsd });
-  await linkLedgerEntriesToInvoice(entries.map((e) => e.id), invoice.id);
+  if (existing) {
+    const invoice = await replaceInvoiceContents(existing.id, totalAmountUsd);
+    return res.status(200).json(invoice);
+  }
 
+  const invoice = await createInvoice({ resellerId, periodType, periodValue, totalAmountUsd });
   return res.status(201).json(invoice);
 }
 
-// Annual invoices show every renewal_deduction in the year (including ones
-// a monthly invoice already claimed), matching create()'s full-year total -
-// getLedgerEntriesForInvoice alone would miss those, since it only returns
-// entries actually linked to this invoice's id. Monthly invoices are
-// unaffected - their line items are exactly what's linked to them, as before.
+// Matches create()'s totals for both period types: every renewal_deduction
+// within the invoice's own period, recomputed fresh rather than read back
+// via a stored link, so a PDF/preview always reflects the latest state even
+// between explicit regenerations.
 async function buildInvoiceLineItems(invoice) {
-  const ledgerRows =
-    invoice.period_type === 'annual'
-      ? await getRenewalDeductionsForResellerInPeriod(
-          invoice.reseller_id,
-          resolvePeriod(invoice.period_type, invoice.period_value).start,
-          resolvePeriod(invoice.period_type, invoice.period_value).end,
-        )
-      : await getLedgerEntriesForInvoice(invoice.id);
+  const period = resolvePeriod(invoice.period_type, invoice.period_value);
+  const ledgerRows = await getRenewalDeductionsForResellerInPeriod(invoice.reseller_id, period.start, period.end);
   const accountIds = [...new Set(ledgerRows.map((r) => r.related_account_id).filter((id) => id !== null))];
   const accountLabels = await findAccountLabelsByIds(accountIds);
 

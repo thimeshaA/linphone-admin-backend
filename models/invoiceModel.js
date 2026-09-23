@@ -87,29 +87,6 @@ async function markInvoiceSent(id) {
   await adminPool.query('UPDATE invoices SET sent_at = NOW() WHERE id = ?', [id]);
 }
 
-// Billing section of the account/reseller reports (Phase 5) - how many
-// invoices were sent within the report's period. Scoped per-reseller
-// (report's own scopeFilter) or platform-wide ({}).
-async function countInvoicesSentInPeriod(scopeFilter, periodStart, periodEnd) {
-  const { condition, params } = buildScopedWhereClause(scopeFilter);
-  const [rows] = await adminPool.query(
-    `SELECT COUNT(*) AS count FROM invoices WHERE ${condition} AND sent_at >= ? AND sent_at < ?`,
-    [...params, periodStart, periodEnd]
-  );
-  return rows[0].count;
-}
-
-// Same as countInvoicesSentInPeriod but broken out per reseller, for the
-// reseller report's per-reseller billing breakdown table (admin-only, always
-// platform-wide).
-async function getInvoicesSentCountsByReseller(periodStart, periodEnd) {
-  const [rows] = await adminPool.query(
-    'SELECT reseller_id, COUNT(*) AS count FROM invoices WHERE sent_at >= ? AND sent_at < ? GROUP BY reseller_id',
-    [periodStart, periodEnd]
-  );
-  return rows;
-}
-
 module.exports = {
   buildScopedWhereClause,
   findInvoiceByResellerAndPeriod,
@@ -118,6 +95,4 @@ module.exports = {
   getInvoiceById,
   listInvoices,
   markInvoiceSent,
-  countInvoicesSentInPeriod,
-  getInvoicesSentCountsByReseller,
 };

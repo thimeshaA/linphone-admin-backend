@@ -1,13 +1,12 @@
 const { getAccountRows, getAccountCreationCounts } = require('../models/reportsModel');
 const { findAdminUsernamesByIds, listResellers } = require('../models/adminModel');
-const { getWalletByResellerId, listAllWalletBalances } = require('../models/walletModel');
 const {
   getLedgerTotalsByType,
   getLedgerTotalsByTypeAndReseller,
   getBalanceAsOf,
   getBalancesAsOfByReseller,
+  getLedgerEntriesInPeriod,
 } = require('../models/walletLedgerModel');
-const { countInvoicesSentInPeriod, getInvoicesSentCountsByReseller } = require('../models/invoiceModel');
 const { parsePeriod } = require('../utils/reportPeriod');
 const pdfReport = require('../utils/pdfReport');
 
@@ -153,8 +152,20 @@ function buildTimelineSeries(buckets, counts) {
 // it can't drift from what those tables actually contain.
 // ---------------------------------------------------------------------------
 
+// Negative balances render as "-$50.00", not "$-50.00" - the sign belongs
+// outside the currency symbol.
 function formatUsd(amount) {
-  return `$${Number(amount).toFixed(2)}`;
+  const n = Number(amount);
+  return n < 0 ? `-$${Math.abs(n).toFixed(2)}` : `$${n.toFixed(2)}`;
+}
+
+// Same as formatUsd but always signed (e.g. "+$30.00" / "-$5.00") - used for
+// individual statement line items, where the sign is the whole point of the
+// column (a credit vs. a deduction), unlike a balance which just happens to
+// be negative or positive.
+function formatSignedUsd(amount) {
+  const n = Number(amount);
+  return n < 0 ? `-$${Math.abs(n).toFixed(2)}` : `+$${n.toFixed(2)}`;
 }
 
 // wallet_ledger.type -> the two report figures they roll up into. Deductions
@@ -170,35 +181,38 @@ function summarizeLedgerTotals(rows) {
   };
 }
 
-// resellerId is the single reseller to compute "amount owed" for (reseller's
-// own report); null means platform-wide (admin report), summing every
-// reseller currently in debt. Unlike the other figures here, "owed" is
-// intentionally a *current*, not period-end, snapshot - same live balance
-// GET /api/resellers/:id/wallet already derives owedAccounts from.
-async function getBillingTotals(scopeFilter, resellerId, start, end) {
-  const [ledgerRows, balanceAtEnd, invoicesIssued] = await Promise.all([
+// Every billing figure is derived from wallet_ledger - the append-only real
+// record - rather than the wallets.balance_usd snapshot column, so a report
+// can never disagree with itself (or need a wallets row to exist at all: a
+// reseller with real ledger activity but no backfilled wallets row still
+// gets a correct "owed" figure here). "Owed" is intentionally a *current*
+// (as of now), not period-end, snapshot - the other figures describe what
+// happened during the period, but "owed" is "how much do they owe today".
+//
+// Platform-wide (scopeFilter without creator_id), "owed" sums only the
+// resellers who are actually in debt right now - never netting one
+// reseller's credit balance against another's debt, which a single combined
+// getBalanceAsOf({}, now) would silently do.
+async function getBillingTotals(scopeFilter, start, end) {
+  const isSingleReseller = Boolean(scopeFilter && scopeFilter.creator_id !== undefined);
+
+  const [ledgerRows, balanceAtEnd, owed] = await Promise.all([
     getLedgerTotalsByType(scopeFilter, start, end),
     getBalanceAsOf(scopeFilter, end),
-    countInvoicesSentInPeriod(scopeFilter, start, end),
+    isSingleReseller
+      ? getBalanceAsOf(scopeFilter, new Date()).then((b) => (Number(b) < 0 ? Math.abs(Number(b)) : 0))
+      : getBalancesAsOfByReseller(new Date()).then((rows) =>
+          rows.reduce((sum, r) => sum + (Number(r.balance) < 0 ? Math.abs(Number(r.balance)) : 0), 0)
+        ),
   ]);
 
   const { credited, deducted } = summarizeLedgerTotals(ledgerRows);
-
-  let owed;
-  if (resellerId) {
-    const wallet = await getWalletByResellerId(resellerId, {});
-    owed = wallet && wallet.balance_usd < 0 ? Math.abs(wallet.balance_usd) : 0;
-  } else {
-    const balances = await listAllWalletBalances();
-    owed = balances.reduce((sum, w) => sum + (w.balance_usd < 0 ? Math.abs(w.balance_usd) : 0), 0);
-  }
 
   return {
     balanceAtPeriodEnd: Number(balanceAtEnd),
     credited,
     deducted,
     owed,
-    invoicesIssued: Number(invoicesIssued),
   };
 }
 
@@ -211,7 +225,6 @@ function billingKpiSection(totals) {
       { label: 'Total Credited', value: formatUsd(totals.credited) },
       { label: 'Total Deducted', value: formatUsd(totals.deducted) },
       { label: 'Amount Owed', value: formatUsd(totals.owed) },
-      { label: 'Invoices Issued', value: totals.invoicesIssued },
     ],
   };
 }
@@ -222,7 +235,6 @@ const BILLING_TABLE_COLUMNS = [
   { key: 'credited', label: 'Credited', width: 90, align: 'right' },
   { key: 'deducted', label: 'Deducted', width: 90, align: 'right' },
   { key: 'owed', label: 'Owed', width: 80, align: 'right' },
-  { key: 'invoices_issued', label: 'Invoices Issued', width: 100, align: 'right' },
 ];
 
 function billingRow(label, totals) {
@@ -232,7 +244,6 @@ function billingRow(label, totals) {
     credited: formatUsd(totals.credited),
     deducted: formatUsd(totals.deducted),
     owed: formatUsd(totals.owed),
-    invoices_issued: totals.invoicesIssued,
   };
 }
 
@@ -243,14 +254,12 @@ function billingRow(label, totals) {
 // platform-wide KPIs use, rather than re-summing the per-reseller rows, so
 // the two reports can never disagree about the platform total.
 async function buildBillingTableSection(resellers, start, end) {
-  const [ledgerByReseller, balancesByReseller, issuedByReseller, currentBalances, platformTotals] =
-    await Promise.all([
-      getLedgerTotalsByTypeAndReseller(start, end),
-      getBalancesAsOfByReseller(end),
-      getInvoicesSentCountsByReseller(start, end),
-      listAllWalletBalances(),
-      getBillingTotals({}, null, start, end),
-    ]);
+  const [ledgerByReseller, balancesByReseller, currentBalancesByReseller, platformTotals] = await Promise.all([
+    getLedgerTotalsByTypeAndReseller(start, end),
+    getBalancesAsOfByReseller(end),
+    getBalancesAsOfByReseller(new Date()),
+    getBillingTotals({}, start, end),
+  ]);
 
   const ledgerMap = new Map();
   for (const row of ledgerByReseller) {
@@ -258,8 +267,7 @@ async function buildBillingTableSection(resellers, start, end) {
     ledgerMap.get(row.reseller_id).push(row);
   }
   const balanceAtEndMap = new Map(balancesByReseller.map((r) => [r.reseller_id, Number(r.balance)]));
-  const issuedMap = new Map(issuedByReseller.map((r) => [r.reseller_id, Number(r.count)]));
-  const currentBalanceMap = new Map(currentBalances.map((w) => [w.reseller_id, Number(w.balance_usd)]));
+  const currentBalanceMap = new Map(currentBalancesByReseller.map((r) => [r.reseller_id, Number(r.balance)]));
 
   const rows = resellers.map((r) => {
     const { credited, deducted } = summarizeLedgerTotals(ledgerMap.get(r.id) || []);
@@ -269,7 +277,6 @@ async function buildBillingTableSection(resellers, start, end) {
       credited,
       deducted,
       owed: currentBalance < 0 ? Math.abs(currentBalance) : 0,
-      invoicesIssued: issuedMap.get(r.id) || 0,
     };
     return billingRow(r.username, totals);
   });
@@ -280,6 +287,85 @@ async function buildBillingTableSection(resellers, start, end) {
     title: 'Billing',
     kind: 'table',
     columns: BILLING_TABLE_COLUMNS,
+    rows,
+  };
+}
+
+const LEDGER_TYPE_LABELS = {
+  initial_credit: 'Initial Credit',
+  admin_topup: 'Top-Up',
+  renewal_deduction: 'Renewal Deduction',
+};
+
+function billingStatementColumns(includeReseller) {
+  const columns = [
+    { key: 'date', label: 'Date', width: 68, align: 'left' },
+    { key: 'type', label: 'Type', width: 100, align: 'left' },
+    { key: 'description', label: 'Description', flex: 2, align: 'left' },
+    { key: 'amount', label: 'Amount', width: 80, align: 'right' },
+    { key: 'balance', label: 'Balance', width: 80, align: 'right' },
+  ];
+  if (includeReseller) {
+    columns.splice(1, 0, { key: 'reseller', label: 'Reseller', flex: 1.3, align: 'left' });
+  }
+  return columns;
+}
+
+// A real itemized statement, not just the KPIs/table above: every
+// wallet_ledger row in this scope+period, oldest first, with a running
+// balance - so the ending figure is always traceable back to actual rows,
+// never a separately-computed number that could silently drift from what's
+// shown here. Platform-wide (admin) statements track the running balance per
+// reseller (seeded from that reseller's own balance as of the period start),
+// since a single combined running total across different wallets wouldn't
+// mean anything.
+async function buildBillingStatementSection(scopeFilter, resellerId, start, end) {
+  const entries = await getLedgerEntriesInPeriod(scopeFilter, start, end);
+  const includeReseller = !resellerId;
+
+  let usernameMap = {};
+  let runningByReseller;
+  let runningSingle;
+  if (includeReseller) {
+    const [openings, names] = await Promise.all([
+      getBalancesAsOfByReseller(start),
+      findAdminUsernamesByIds([...new Set(entries.map((e) => e.reseller_id))]),
+    ]);
+    runningByReseller = new Map(openings.map((r) => [r.reseller_id, Number(r.balance)]));
+    usernameMap = names;
+  } else {
+    runningSingle = Number(await getBalanceAsOf(scopeFilter, start));
+  }
+
+  const rows = entries.map((e) => {
+    const amount = Number(e.amount_usd);
+    let balance;
+    if (includeReseller) {
+      const previous = runningByReseller.get(e.reseller_id) || 0;
+      balance = previous + amount;
+      runningByReseller.set(e.reseller_id, balance);
+    } else {
+      runningSingle += amount;
+      balance = runningSingle;
+    }
+
+    const row = {
+      date: formatDate(e.created_at),
+      type: LEDGER_TYPE_LABELS[e.type] || e.type,
+      description: e.account_sip_id || e.note || EMPTY,
+      amount: formatSignedUsd(amount),
+      balance: formatUsd(balance),
+    };
+    if (includeReseller) {
+      row.reseller = usernameMap[e.reseller_id] || `Reseller #${e.reseller_id}`;
+    }
+    return row;
+  });
+
+  return {
+    title: 'Billing Statement',
+    kind: 'table',
+    columns: billingStatementColumns(includeReseller),
     rows,
   };
 }
@@ -301,7 +387,11 @@ async function accountsReport(req, res) {
   const usernameMap = isAdmin ? await usernamesForAccounts(accounts) : {};
   const statusCounts = summarizeStatuses(accounts, now);
   const timelinePoints = buildTimelineSeries(buildTimelineBuckets(req.query.period, start), creationCounts);
-  const billingTotals = await getBillingTotals(req.scopeFilter, isAdmin ? null : req.admin.id, start, end);
+  const resellerId = isAdmin ? null : req.admin.id;
+  const [billingTotals, billingStatementSection] = await Promise.all([
+    getBillingTotals(req.scopeFilter, start, end),
+    buildBillingStatementSection(req.scopeFilter, resellerId, start, end),
+  ]);
 
   const detailRows = accounts.map((a) => {
     const row = buildAccountRow(a, now);
@@ -326,6 +416,7 @@ async function accountsReport(req, res) {
       timeline: { points: timelinePoints },
     },
     billingKpiSection(billingTotals),
+    billingStatementSection,
   ];
 
   if (isAdmin) {
@@ -389,7 +480,10 @@ async function resellersReport(req, res) {
     .sort((a, b) => b.accounts_created - a.accounts_created);
 
   const accountRows = accounts.map((a) => withCreatedBy(buildAccountRow(a, now), a, usernameMap));
-  const billingSection = await buildBillingTableSection(resellers, start, end);
+  const [billingSection, billingStatementSection] = await Promise.all([
+    buildBillingTableSection(resellers, start, end),
+    buildBillingStatementSection({}, null, start, end),
+  ]);
 
   sendPdf(res, reportFilename('reseller-report', req, slug), {
     reportTitle: 'Reseller Management Report',
@@ -431,6 +525,7 @@ async function resellersReport(req, res) {
         },
       },
       billingSection,
+      billingStatementSection,
       {
         title: 'Account Detail',
         kind: 'table',

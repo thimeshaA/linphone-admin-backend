@@ -3,16 +3,12 @@ const { TEST_ADMIN_PASSWORD, TEST_ADMIN, hashOf } = require('./helpers/fixtures'
 
 jest.mock('../models/reportsModel');
 jest.mock('../models/adminModel');
-jest.mock('../models/walletModel');
 jest.mock('../models/walletLedgerModel');
-jest.mock('../models/invoiceModel');
 jest.mock('../utils/mailer');
 
 const reportsModel = require('../models/reportsModel');
 const adminModel = require('../models/adminModel');
-const walletModel = require('../models/walletModel');
 const walletLedgerModel = require('../models/walletLedgerModel');
-const invoiceModel = require('../models/invoiceModel');
 const pdfReport = require('../utils/pdfReport');
 const app = require('../index');
 
@@ -48,24 +44,21 @@ function pdfBuffer(res) {
 // actually catch the section reporting the wrong figures.
 const LEDGER_ENTRIES = [
   // Within the Aug 2026 report period, for TEST_RESELLER.
-  { reseller_id: TEST_RESELLER.id, type: 'initial_credit', amount_usd: 100, created_at: new Date('2026-08-01T00:00:00Z') },
-  { reseller_id: TEST_RESELLER.id, type: 'admin_topup', amount_usd: 50, created_at: new Date('2026-08-10T00:00:00Z') },
-  { reseller_id: TEST_RESELLER.id, type: 'renewal_deduction', amount_usd: -30, created_at: new Date('2026-08-15T00:00:00Z') },
+  { id: 1, reseller_id: TEST_RESELLER.id, type: 'initial_credit', amount_usd: 100, created_at: new Date('2026-08-01T00:00:00Z') },
+  { id: 2, reseller_id: TEST_RESELLER.id, type: 'admin_topup', amount_usd: 50, created_at: new Date('2026-08-10T00:00:00Z') },
+  {
+    id: 3,
+    reseller_id: TEST_RESELLER.id,
+    type: 'renewal_deduction',
+    amount_usd: -30,
+    account_sip_id: 'user1@sip.example.com',
+    created_at: new Date('2026-08-15T00:00:00Z'),
+  },
   // Before the period - must count toward "balance at period end" but not
   // toward the period's own credited/deducted totals.
-  { reseller_id: TEST_RESELLER.id, type: 'initial_credit', amount_usd: 10, created_at: new Date('2026-07-01T00:00:00Z') },
+  { id: 4, reseller_id: TEST_RESELLER.id, type: 'initial_credit', amount_usd: 10, created_at: new Date('2026-07-01T00:00:00Z') },
   // A second reseller, within the period - only shows up in platform-wide figures.
-  { reseller_id: OTHER_RESELLER_ID, type: 'renewal_deduction', amount_usd: -5, created_at: new Date('2026-08-08T00:00:00Z') },
-];
-
-// Phase 4 corrected: invoices are period statements with no status/paid_at -
-// only sent_at matters for the billing section's "Invoices Issued" count.
-const INVOICES = [
-  { reseller_id: TEST_RESELLER.id, sent_at: new Date('2026-08-05T00:00:00Z') },
-  { reseller_id: TEST_RESELLER.id, sent_at: new Date('2026-08-12T00:00:00Z') },
-  // Before the period - must not count toward the issued figure.
-  { reseller_id: TEST_RESELLER.id, sent_at: new Date('2026-07-01T00:00:00Z') },
-  { reseller_id: OTHER_RESELLER_ID, sent_at: new Date('2026-08-06T00:00:00Z') },
+  { id: 5, reseller_id: OTHER_RESELLER_ID, type: 'renewal_deduction', amount_usd: -5, created_at: new Date('2026-08-08T00:00:00Z') },
 ];
 
 function scopedRows(rows, scopeFilter) {
@@ -111,31 +104,14 @@ function wireBillingMocks() {
     return [...totals.entries()].map(([resellerId, balance]) => ({ reseller_id: resellerId, balance }));
   });
 
-  invoiceModel.countInvoicesSentInPeriod.mockImplementation(async (scopeFilter, start, end) => {
-    const rows = scopedRows(INVOICES, scopeFilter);
-    return rows.filter((inv) => inv.sent_at >= start && inv.sent_at < end).length;
-  });
-
-  invoiceModel.getInvoicesSentCountsByReseller.mockImplementation(async (start, end) => {
-    const counts = new Map();
-    INVOICES.filter((inv) => inv.sent_at >= start && inv.sent_at < end).forEach((inv) => {
-      counts.set(inv.reseller_id, (counts.get(inv.reseller_id) || 0) + 1);
-    });
-    return [...counts.entries()].map(([resellerId, count]) => ({ reseller_id: resellerId, count }));
-  });
-
-  // Current (not period-scoped) wallet balances back "amount owed", which is
-  // deliberately a live figure - see getBillingTotals in reportsController.
-  walletModel.getWalletByResellerId.mockImplementation(async (resellerId) => {
-    if (Number(resellerId) === TEST_RESELLER.id) return { reseller_id: TEST_RESELLER.id, balance_usd: -15 };
-    if (Number(resellerId) === OTHER_RESELLER_ID) return { reseller_id: OTHER_RESELLER_ID, balance_usd: -5 };
-    return null;
-  });
-
-  walletModel.listAllWalletBalances.mockResolvedValue([
-    { reseller_id: TEST_RESELLER.id, balance_usd: -15 },
-    { reseller_id: OTHER_RESELLER_ID, balance_usd: -5 },
-  ]);
+  // Backs the billing statement table - real ledger rows, oldest first,
+  // exactly like the real `ORDER BY created_at ASC, id ASC` query.
+  walletLedgerModel.getLedgerEntriesInPeriod.mockImplementation(async (scopeFilter, start, end) =>
+    scopedRows(LEDGER_ENTRIES, scopeFilter)
+      .filter((r) => r.created_at >= start && r.created_at < end)
+      .slice()
+      .sort((a, b) => a.created_at - b.created_at || a.id - b.id)
+  );
 }
 
 function billingStat(sections, label) {
@@ -382,11 +358,16 @@ describe('Reports', () => {
     });
   });
 
-  // Phase 5: the billing section on both reports, checked against the fake
-  // wallet_ledger/invoices rows in LEDGER_ENTRIES/INVOICES above rather than
-  // against canned totals - so a wrong period boundary or a mixed-up
-  // credited/deducted category would actually fail these.
-  describe('Billing section (Phase 5)', () => {
+  // Phase 5 (and its later real-records rework): the billing section on both
+  // reports, checked against the fake wallet_ledger rows in LEDGER_ENTRIES
+  // above rather than against canned totals - so a wrong period boundary or
+  // a mixed-up credited/deducted category would actually fail these.
+  // "Amount Owed" is now derived from wallet_ledger itself (as of "now", not
+  // the wallets.balance_usd snapshot column) - both TEST_RESELLER and
+  // OTHER_RESELLER's ledger entries here are all in the past relative to
+  // whenever this suite runs, so "as of now" and "as of period end" agree
+  // unless a test adds later activity.
+  describe('Billing section', () => {
     test("18. reseller's own account report shows only their figures for the period", async () => {
       const spy = spyOnRenderedTables();
       const res = await resellerAgent.get('/api/reports/accounts?period=monthly&month=2026-08');
@@ -396,8 +377,10 @@ describe('Reports', () => {
       expect(billingStat(options.sections, 'Wallet Balance (Period End)')).toBe('$130.00');
       expect(billingStat(options.sections, 'Total Credited')).toBe('$150.00');
       expect(billingStat(options.sections, 'Total Deducted')).toBe('$30.00');
-      expect(billingStat(options.sections, 'Amount Owed')).toBe('$15.00');
-      expect(billingStat(options.sections, 'Invoices Issued')).toBe(2);
+      // TEST_RESELLER's ledger balance is +$130 (net credit), so they owe
+      // nothing - unlike the old wallets.balance_usd-based figure, which
+      // could disagree with the ledger and was never checked here for it.
+      expect(billingStat(options.sections, 'Amount Owed')).toBe('$0.00');
     });
 
     test("19. admin's platform-wide account report rolls up every reseller's figures for the period", async () => {
@@ -409,8 +392,9 @@ describe('Reports', () => {
       expect(billingStat(options.sections, 'Wallet Balance (Period End)')).toBe('$125.00');
       expect(billingStat(options.sections, 'Total Credited')).toBe('$150.00');
       expect(billingStat(options.sections, 'Total Deducted')).toBe('$35.00');
-      expect(billingStat(options.sections, 'Amount Owed')).toBe('$20.00');
-      expect(billingStat(options.sections, 'Invoices Issued')).toBe(3);
+      // Platform-wide owed sums only resellers actually in debt (OTHER_RESELLER's
+      // $5) - it must never net TEST_RESELLER's +$130 credit against that debt.
+      expect(billingStat(options.sections, 'Amount Owed')).toBe('$5.00');
     });
 
     test('20. reseller report breaks billing figures out per reseller, plus a platform total row that matches the account report platform figures', async () => {
@@ -447,25 +431,123 @@ describe('Reports', () => {
         balance_period_end: '$130.00',
         credited: '$150.00',
         deducted: '$30.00',
-        owed: '$15.00',
-        invoices_issued: 2,
+        owed: '$0.00',
       });
 
       expect(rowFor('other_reseller')).toMatchObject({
-        balance_period_end: '$-5.00',
+        balance_period_end: '-$5.00', // sign belongs outside the currency symbol, not "$-5.00"
         credited: '$0.00',
         deducted: '$5.00',
         owed: '$5.00',
-        invoices_issued: 1,
       });
 
       expect(rowFor('Platform Total')).toMatchObject({
         balance_period_end: '$125.00',
         credited: '$150.00',
         deducted: '$35.00',
-        owed: '$20.00',
-        invoices_issued: 3,
+        owed: '$5.00',
       });
+    });
+  });
+
+  // The billing statement is a real itemized ledger, not just the
+  // pre-aggregated KPIs/table above - every row here should be traceable
+  // back to an actual LEDGER_ENTRIES fixture row, in chronological order,
+  // with a running balance that ends at exactly the KPI's period-end figure.
+  describe('Billing statement', () => {
+    function statementSection(sections) {
+      return sections.find((s) => s.title === 'Billing Statement');
+    }
+
+    test("21. reseller's own statement lists only their own entries, oldest first, with a running balance and no reseller column", async () => {
+      const spy = spyOnRenderedTables();
+      const res = await resellerAgent.get('/api/reports/accounts?period=monthly&month=2026-08');
+      expect(res.status).toBe(200);
+
+      const [, options] = spy.mock.calls[0];
+      const statement = statementSection(options.sections);
+      expect(statement.columns.some((c) => c.key === 'reseller')).toBe(false);
+
+      // Opening balance (the July $10 initial_credit, before this period)
+      // rolls forward through each of TEST_RESELLER's three August entries.
+      expect(statement.rows).toEqual([
+        { date: '2026-08-01', type: 'Initial Credit', description: '-', amount: '+$100.00', balance: '$110.00' },
+        { date: '2026-08-10', type: 'Top-Up', description: '-', amount: '+$50.00', balance: '$160.00' },
+        {
+          date: '2026-08-15',
+          type: 'Renewal Deduction',
+          description: 'user1@sip.example.com',
+          amount: '-$30.00',
+          balance: '$130.00',
+        },
+      ]);
+      // The statement's own ending balance matches the KPI right above it.
+      expect(statement.rows.at(-1).balance).toBe(billingStat(options.sections, 'Wallet Balance (Period End)'));
+    });
+
+    test("22. admin's platform-wide statement interleaves every reseller's entries chronologically, each with its own running balance and a reseller column", async () => {
+      const spy = spyOnRenderedTables();
+      const res = await adminAgent.get('/api/reports/accounts?period=monthly&month=2026-08');
+      expect(res.status).toBe(200);
+
+      const [, options] = spy.mock.calls[0];
+      const statement = statementSection(options.sections);
+      expect(statement.columns.some((c) => c.key === 'reseller')).toBe(true);
+
+      expect(statement.rows).toEqual([
+        {
+          date: '2026-08-01',
+          reseller: TEST_RESELLER.username,
+          type: 'Initial Credit',
+          description: '-',
+          amount: '+$100.00',
+          balance: '$110.00',
+        },
+        {
+          // OTHER_RESELLER has no username in the mocked lookup, and no
+          // opening balance before the period - both fall back correctly.
+          date: '2026-08-08',
+          reseller: `Reseller #${OTHER_RESELLER_ID}`,
+          type: 'Renewal Deduction',
+          description: '-',
+          amount: '-$5.00',
+          balance: '-$5.00',
+        },
+        {
+          date: '2026-08-10',
+          reseller: TEST_RESELLER.username,
+          type: 'Top-Up',
+          description: '-',
+          amount: '+$50.00',
+          balance: '$160.00',
+        },
+        {
+          date: '2026-08-15',
+          reseller: TEST_RESELLER.username,
+          type: 'Renewal Deduction',
+          description: 'user1@sip.example.com',
+          amount: '-$30.00',
+          balance: '$130.00',
+        },
+      ]);
+    });
+
+    test('23. a period with no ledger activity still renders a statement section, empty rather than absent', async () => {
+      const spy = spyOnRenderedTables();
+      const res = await resellerAgent.get('/api/reports/accounts?period=monthly&month=2025-01');
+      expect(res.status).toBe(200);
+
+      const [, options] = spy.mock.calls[0];
+      expect(statementSection(options.sections).rows).toEqual([]);
+    });
+
+    test("24. the reseller report's platform-wide statement matches the account report's platform statement", async () => {
+      const spy = spyOnRenderedTables();
+      const res = await adminAgent.get('/api/reports/resellers?period=monthly&month=2026-08');
+      expect(res.status).toBe(200);
+
+      const [, options] = spy.mock.calls[0];
+      expect(statementSection(options.sections).rows).toHaveLength(4);
     });
   });
 });
