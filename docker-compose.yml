@@ -1,0 +1,32 @@
+# NOTE: This file is written to eventually live at
+# /srv/admin-panel-project/docker-compose.yml, one level ABOVE the backend/
+# folder. All paths below are written for that final location.
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: backend/Dockerfile
+    container_name: admin-panel-backend-new
+    env_file:
+      - ./backend/.env
+    ports:
+      - "127.0.0.1:8083:4000"
+    restart: unless-stopped
+    networks:
+      - admin-panel-net
+
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: frontend/Dockerfile
+  #   container_name: admin-panel-frontend-new
+  #   env_file:
+  #     - ./frontend/.env
+  #   restart: unless-stopped
+  #   networks:
+  #     - admin-panel-net
+
+networks:
+  admin-panel-net:
+    driver: bridge
