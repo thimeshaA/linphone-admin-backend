@@ -206,15 +206,18 @@ function renderSectionHeading(doc, number, title) {
 // KPI grid - bold-number cards with an alternating left-border accent
 // ---------------------------------------------------------------------------
 
+const KPI_MAX_CARD_WIDTH = 130;
+
 function renderKpiGrid(doc, stats) {
   const left = doc.page.margins.left;
   const width = contentWidth(doc);
   // Always exactly one row - every card's width shrinks to fit however many
   // stats this section has, rather than capping at 4 and wrapping the rest
-  // onto a second, sparser row.
+  // onto a second, sparser row. Capped at KPI_MAX_CARD_WIDTH so a handful of
+  // cards stay compact instead of stretching edge-to-edge across the page.
   const cols = stats.length || 1;
   const gap = 14;
-  const cardWidth = (width - gap * (cols - 1)) / cols;
+  const cardWidth = Math.min((width - gap * (cols - 1)) / cols, KPI_MAX_CARD_WIDTH);
   const cardHeight = 76;
   const rows = Math.ceil(stats.length / cols);
 
