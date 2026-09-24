@@ -209,7 +209,10 @@ function renderSectionHeading(doc, number, title) {
 function renderKpiGrid(doc, stats) {
   const left = doc.page.margins.left;
   const width = contentWidth(doc);
-  const cols = Math.min(stats.length, 4) || 1;
+  // Always exactly one row - every card's width shrinks to fit however many
+  // stats this section has, rather than capping at 4 and wrapping the rest
+  // onto a second, sparser row.
+  const cols = stats.length || 1;
   const gap = 14;
   const cardWidth = (width - gap * (cols - 1)) / cols;
   const cardHeight = 76;
