@@ -11,6 +11,13 @@ function isValidUsername(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(value);
 }
 
+// accounts.authid (and accounts.login, always set equal to it) is a
+// varchar(20) in the real schema - this is deliberately separate from
+// isValidUsername (admins/resellers have no such DB-level limit).
+function isValidAuthid(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9._-]{1,20}$/.test(value);
+}
+
 // Length over forced complexity - long passwords resist brute-force better
 // than mixed-case/special-character rules, which mostly just push people
 // toward predictable substitutions (e.g. "Password1!"). Returns null when
@@ -31,4 +38,11 @@ function isValidPassword(value) {
   return null;
 }
 
-module.exports = { isValidEmail, isValidUsername, isValidPassword, MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH };
+module.exports = {
+  isValidEmail,
+  isValidUsername,
+  isValidAuthid,
+  isValidPassword,
+  MIN_PASSWORD_LENGTH,
+  MAX_PASSWORD_LENGTH,
+};

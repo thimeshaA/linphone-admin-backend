@@ -6,7 +6,8 @@
   "scripts": {
     "test": "jest --runInBand",
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "db:ensure-columns": "node scripts/ensure-additive-columns.js"
   },
   "repository": {
     "type": "git",

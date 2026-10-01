@@ -22,7 +22,7 @@ const { getRenewalCost } = require('../models/settingsModel');
 const { createNotification } = require('../models/notificationModel');
 const { sendMail } = require('../utils/mailer');
 const { renderBatchAccountRequestHtml, renderRenewalDeductionHtml } = require('../utils/emailTemplates');
-const { isValidEmail, isValidUsername } = require('../utils/validators');
+const { isValidEmail, isValidAuthid } = require('../utils/validators');
 
 const REQUEST_RECIPIENT = 'enigma-admin@prometeolk.com';
 
@@ -132,13 +132,13 @@ async function getOne(req, res) {
 }
 
 async function create(req, res) {
-  const { authid, domain, password, status, expires_at, resellerId, email } = req.body;
+  const { authid, domain, password, phone, expires_at, resellerId, email } = req.body;
 
   const errors = {};
 
-  if (!isValidUsername(authid)) {
+  if (!isValidAuthid(authid)) {
     errors.authid =
-      'authid is required (1-64 characters) and may only contain letters, digits, ".", "_" and "-"';
+      'authid is required (1-20 characters) and may only contain letters, digits, ".", "_" and "-"';
   }
 
   if (!domain) {
@@ -147,6 +147,10 @@ async function create(req, res) {
 
   if (!password) {
     errors.password = 'password is required';
+  }
+
+  if (!phone) {
+    errors.phone = 'phone is required';
   }
 
   if (!isValidEmail(email)) {
@@ -171,7 +175,7 @@ async function create(req, res) {
     authid,
     domain,
     passwordHash: hashPassword(authid, domain, password),
-    status: status || 'active',
+    phone,
     expiresAt: expires_at || defaultExpiresAt(),
     creatorId: resellerId,
     email,

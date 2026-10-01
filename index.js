@@ -65,6 +65,26 @@ app.use((err, req, res, next) => {
 module.exports = app;
 
 if (require.main === module) {
-  const PORT = process.env.PORT || 4000;
-  app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+  const { flexisipPool } = require('./config/db');
+  const { ensureAccountsSchema } = require('./db/ensureAccountsSchema');
+
+  (async () => {
+    try {
+      await ensureAccountsSchema(flexisipPool, process.env.FLEXISIP_DB_NAME, {
+        autoCreate: process.env.AUTO_CREATE_SCHEMA === 'true',
+      });
+    } catch (err) {
+      // Never blocks startup - no other DB-dependent route in this app
+      // fails at boot when its database is unreachable, only at request
+      // time (and the admin DB and the accounts DB are entirely separate
+      // connections). Logged loudly so a genuinely missing table or an
+      // unreachable accounts DB is impossible to miss in the logs, without
+      // taking down unrelated features (admin login, etc.) that never touch
+      // the accounts table.
+      console.error(`⚠️  accounts schema check failed at startup: ${err.message}`);
+    }
+
+    const PORT = process.env.PORT || 4000;
+    app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+  })();
 }

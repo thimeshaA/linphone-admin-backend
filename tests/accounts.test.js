@@ -170,27 +170,35 @@ function wireMocks() {
     return row;
   }
 
+  // status is never stored on the fake row - it's derived the same way the
+  // real accounts table's CASE expression derives it (disabled_at wins,
+  // otherwise compare expires_at to now), so these mocks match the model's
+  // actual computed-status contract instead of trusting a stored field.
+  function computeStatus(row) {
+    if (row.disabled_at) return 'disabled';
+    return new Date(row.expires_at) < new Date() ? 'expired' : 'active';
+  }
+
   accountModel.findAccountByAuthid.mockImplementation(async (authid) => {
     const row = Object.values(accountsById).find((r) => r.authid === authid);
     return row ? { id: row.id } : null;
   });
 
-  accountModel.createAccount.mockImplementation(async ({ authid, domain, status, expiresAt, creatorId, email }) => {
+  accountModel.createAccount.mockImplementation(async ({ authid, domain, phone, expiresAt, creatorId, email }) => {
     const id = nextAccountId++;
     const row = {
       id,
       authid,
       domain,
+      phone,
       created_at: new Date(),
-      status,
       expires_at: expiresAt,
       disabled_at: null,
-      expired_at: null,
       creator_id: creatorId,
       email,
     };
     accountsById[id] = row;
-    return { ...row };
+    return { ...row, status: computeStatus(row) };
   });
 
   accountModel.listAccounts.mockImplementation(async (scopeFilter, { status, search } = {}) => {
@@ -198,42 +206,38 @@ function wireMocks() {
     if (scopeFilter && scopeFilter.creator_id !== undefined) {
       rows = rows.filter((r) => r.creator_id === scopeFilter.creator_id);
     }
-    if (status) rows = rows.filter((r) => r.status === status);
+    let projected = rows.map((r) => ({ ...r, status: computeStatus(r) }));
+    if (status) projected = projected.filter((r) => r.status === status);
     if (search) {
-      rows = rows.filter((r) => r.authid.includes(search) || r.domain.includes(search));
+      projected = projected.filter((r) => r.authid.includes(search) || r.domain.includes(search));
     }
-    return rows.map((r) => ({ ...r }));
+    return projected;
   });
 
   accountModel.getAccountById.mockImplementation(async (id, scopeFilter) => {
     const row = scopedRow(Number(id), scopeFilter);
-    return row ? { ...row } : null;
+    return row ? { ...row, status: computeStatus(row) } : null;
   });
 
   accountModel.reassignAccountCreator.mockImplementation(async (id, resellerId) => {
     const row = accountsById[Number(id)];
     if (!row) return null;
     row.creator_id = resellerId;
-    return { ...row };
+    return { ...row, status: computeStatus(row) };
   });
 
   accountModel.renewAccount.mockImplementation(async (id, scopeFilter, expiresAt) => {
     const row = scopedRow(Number(id), scopeFilter);
     if (!row) return null;
     row.expires_at = expiresAt;
-    if (new Date(expiresAt) > new Date()) {
-      row.status = 'active';
-      row.expired_at = null;
-    }
-    return { ...row };
+    return { ...row, status: computeStatus(row) };
   });
 
   accountModel.disableAccount.mockImplementation(async (id, scopeFilter) => {
     const row = scopedRow(Number(id), scopeFilter);
     if (!row) return null;
     row.disabled_at = new Date();
-    row.status = 'disabled';
-    return { ...row };
+    return { ...row, status: computeStatus(row) };
   });
 
   accountModel.updateAccountPassword.mockImplementation(async (id, scopeFilter) => {
@@ -255,6 +259,17 @@ function monthsFromNowCloseTo(date, months, toleranceDays = 1) {
   return diffMs < toleranceDays * 24 * 60 * 60 * 1000;
 }
 
+// accounts.authid is a real varchar(20) column - a `${prefix}_${Date.now()}`
+// style id (the pattern used everywhere else in this codebase's tests) is
+// routinely 25+ characters and would fail validation outright. Base-36
+// timestamp + a per-process counter keeps every generated id well under the
+// limit while still being unique across this file's test run.
+let uniqueAuthidCounter = 0;
+function uniqueAuthid(prefix = 'a') {
+  uniqueAuthidCounter += 1;
+  return `${prefix}${Date.now().toString(36)}${uniqueAuthidCounter}`.slice(0, 20);
+}
+
 describe('Accounts flow (admin + reseller)', () => {
   const adminAgent = request.agent(app);
   let resellerAgent;
@@ -267,7 +282,7 @@ describe('Accounts flow (admin + reseller)', () => {
   let reseller2Id;
 
   let accountId;
-  const accountAuthid = `testuser_${Date.now()}`;
+  const accountAuthid = uniqueAuthid('t');
   const accountDomain = 'test.example.com';
 
   let otherAccountId;
@@ -314,6 +329,7 @@ describe('Accounts flow (admin + reseller)', () => {
       authid: accountAuthid,
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'enduser@example.com',
     });
@@ -329,6 +345,7 @@ describe('Accounts flow (admin + reseller)', () => {
       authid: 'not an authid@example.com',
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'valid@example.com',
     });
@@ -340,9 +357,10 @@ describe('Accounts flow (admin + reseller)', () => {
 
   test('3a2. a malformed email is rejected with a field-specific 400', async () => {
     const res = await adminAgent.post('/api/accounts').send({
-      authid: `testuser_${Date.now()}_bad_email`,
+      authid: uniqueAuthid('t'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'not-an-email',
     });
@@ -357,6 +375,7 @@ describe('Accounts flow (admin + reseller)', () => {
       authid: accountAuthid,
       domain: 'a-completely-different-domain.example.com',
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'someoneelse@example.com',
     });
@@ -367,9 +386,10 @@ describe('Accounts flow (admin + reseller)', () => {
 
   test('3d. resellerId referencing a non-reseller admin is rejected with 400', async () => {
     const res = await adminAgent.post('/api/accounts').send({
-      authid: `testuser_${Date.now()}_bad_owner`,
+      authid: uniqueAuthid('t'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId: TEST_ADMIN.id,
       email: 'someoneelse2@example.com',
     });
@@ -380,9 +400,10 @@ describe('Accounts flow (admin + reseller)', () => {
 
   test('3e. missing resellerId is rejected with 400', async () => {
     const res = await adminAgent.post('/api/accounts').send({
-      authid: `testuser_${Date.now()}_no_owner`,
+      authid: uniqueAuthid('t'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       email: 'someoneelse3@example.com',
     });
 
@@ -392,9 +413,10 @@ describe('Accounts flow (admin + reseller)', () => {
 
   test('3b. as admin: create a second throwaway account owned by the second reseller', async () => {
     const res = await adminAgent.post('/api/accounts').send({
-      authid: `otheruser_${Date.now()}`,
+      authid: uniqueAuthid('o'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId: reseller2Id,
       email: 'otherenduser@example.com',
     });
@@ -407,9 +429,10 @@ describe('Accounts flow (admin + reseller)', () => {
 
   test('3f. as admin: create a third throwaway account, owned by the first reseller, for reassignment tests', async () => {
     const res = await adminAgent.post('/api/accounts').send({
-      authid: `reassignuser_${Date.now()}`,
+      authid: uniqueAuthid('r'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'reassignenduser@example.com',
     });
@@ -418,6 +441,53 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body.creator_id).toBe(resellerId);
     reassignAccountId = res.body.id;
     expect(mailer.sendMail).toHaveBeenCalledTimes(5);
+  });
+
+  test('3g. missing phone is rejected with a field-specific 400', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('t'),
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      resellerId,
+      email: 'nophone@example.com',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('phone');
+  });
+
+  test('3h. an authid over 20 characters is rejected with a field-specific 400', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: 'a'.repeat(21),
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      phone: '+15551234567',
+      resellerId,
+      email: 'toolong@example.com',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('authid');
+    expect(res.body.errors.authid).toContain('1-20 characters');
+  });
+
+  test('3i. an authid of exactly 20 characters is accepted (the real column is varchar(20))', async () => {
+    const authid = 'a'.repeat(20);
+    const res = await adminAgent.post('/api/accounts').send({
+      authid,
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      phone: '+15551234567',
+      resellerId,
+      email: 'exact20@example.com',
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.authid).toBe(authid);
+
+    // Cleanup only - later tests assert an exact count of accounts owned by
+    // this reseller, and this one exists purely to prove the boundary case.
+    await adminAgent.delete(`/api/accounts/${res.body.id}`);
   });
 
   test('4. as admin: list accounts, confirm created_by is present and correct', async () => {
@@ -436,14 +506,13 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body).toMatchObject({ id: accountId, authid: accountAuthid, domain: accountDomain });
   });
 
-  test('6. as admin: renew with a custom future date resets status to active and clears expired_at', async () => {
+  test('6. as admin: renew with a custom future date resets computed status to active', async () => {
     const futureDate = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
 
     const res = await adminAgent.patch(`/api/accounts/${accountId}/renew`).send({ expires_at: futureDate });
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('active');
-    expect(res.body.expired_at).toBeNull();
     expect(new Date(res.body.expires_at).toISOString()).toBe(futureDate);
   });
 
@@ -541,9 +610,10 @@ describe('Accounts flow (admin + reseller)', () => {
 
   test('13b. as reseller: creating an account directly is forbidden', async () => {
     const res = await resellerAgent.post('/api/accounts').send({
-      authid: `resellerattempt_${Date.now()}`,
+      authid: uniqueAuthid('ra'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'resellerattempt@example.com',
     });
@@ -603,6 +673,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
       authid,
       domain: 'test.example.com',
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: `${authid}@example.com`,
     });
@@ -624,7 +695,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
       email: `deduct_reseller_${Date.now()}@example.com`,
       initialCredit: 10,
     });
-    account = await createAccount({ authid: `deduct_account_${Date.now()}`, resellerId: reseller.id });
+    account = await createAccount({ authid: uniqueAuthid('d'), resellerId: reseller.id });
 
     mailer.sendMail.mockClear();
   });
@@ -682,13 +753,12 @@ describe('Renewal wallet deduction (Phase 2)', () => {
     const unassignedId = 555555;
     accountsById[unassignedId] = {
       id: unassignedId,
-      authid: `unassigned_${Date.now()}`,
+      authid: uniqueAuthid('u'),
       domain: 'test.example.com',
+      phone: '+15550000000',
       created_at: new Date(),
-      status: 'active',
-      expires_at: new Date(),
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
       disabled_at: null,
-      expired_at: null,
       creator_id: null,
       email: 'unassigned@example.com',
     };
@@ -717,7 +787,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
     delete walletsByResellerId[noWalletReseller.id];
 
     const noWalletAccount = await createAccount({
-      authid: `deduct_nowallet_account_${Date.now()}`,
+      authid: uniqueAuthid('n'),
       resellerId: noWalletReseller.id,
     });
 
@@ -793,7 +863,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
       email: `deduct_deepdebt_${Date.now()}@example.com`,
     });
     const deepDebtAccount = await createAccount({
-      authid: `deduct_deepdebt_account_${Date.now()}`,
+      authid: uniqueAuthid('dd'),
       resellerId: deepDebtReseller.id,
     });
     walletsByResellerId[deepDebtReseller.id].balance_usd = -100000;
@@ -819,7 +889,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
       email: `deduct_negfmt_${Date.now()}@example.com`,
     });
     const negBalanceAccount = await createAccount({
-      authid: `deduct_negfmt_account_${Date.now()}`,
+      authid: uniqueAuthid('nf'),
       resellerId: negBalanceReseller.id,
     });
     walletsByResellerId[negBalanceReseller.id].balance_usd = -8; // 8 + 15 = 23, cleanly negative after this renewal
@@ -873,7 +943,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
         initialCredit: 1000,
       });
       propAccount = await createAccount({
-        authid: `deduct_period_account_${Date.now()}`,
+        authid: uniqueAuthid('p'),
         resellerId: propReseller.id,
       });
 
