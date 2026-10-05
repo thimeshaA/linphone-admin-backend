@@ -6,7 +6,7 @@ const { adminPool } = require('../config/db');
 // contain '@', so a username value can never spuriously match the email side.
 const ADMIN_AUTH_COLUMNS =
   'id, username, password_hash, role, status, expires_at, expired_at, email, created_at, ' +
-  'password_changed_at, failed_login_attempts, locked_until';
+  'password_changed_at, failed_login_attempts, locked_until, token_version';
 
 async function findAdminByUsername(identifier) {
   const [rows] = await adminPool.query(
@@ -58,14 +58,24 @@ async function updatePasswordById(id, passwordHash) {
   return result.affectedRows > 0;
 }
 
-// Lightweight single-column read used on every authenticated request (see
-// verifyToken) to check whether a JWT was issued before the account's most
-// recent password change - deliberately not the full ADMIN_AUTH_COLUMNS read.
-async function getPasswordChangedAt(id) {
-  const [rows] = await adminPool.query('SELECT password_changed_at FROM admins WHERE id = ? LIMIT 1', [
-    id,
-  ]);
-  return rows[0] ? rows[0].password_changed_at : null;
+// Lightweight read used on every authenticated request (see verifyToken) to
+// check whether a JWT predates the account's most recent password change
+// (`pwc` claim) or explicit logout (`tv` claim) - deliberately not the full
+// ADMIN_AUTH_COLUMNS read.
+async function getSessionInvalidationState(id) {
+  const [rows] = await adminPool.query(
+    'SELECT password_changed_at, token_version FROM admins WHERE id = ? LIMIT 1',
+    [id]
+  );
+  return rows[0] || null;
+}
+
+// Bumping token_version makes every JWT issued before this call fail the
+// `tv` check in verifyToken, regardless of its expiry - this is what gives
+// logout (and any future "sign out everywhere") actual server-side effect
+// instead of just clearing the cookie client-side.
+async function incrementTokenVersion(id) {
+  await adminPool.query('UPDATE admins SET token_version = token_version + 1 WHERE id = ?', [id]);
 }
 
 // Threshold/lockout-duration policy lives in the controller; this just
@@ -192,7 +202,8 @@ module.exports = {
   findAdminUsernamesByIds,
   findAdminById,
   updatePasswordById,
-  getPasswordChangedAt,
+  getSessionInvalidationState,
+  incrementTokenVersion,
   recordFailedLogin,
   clearLoginLockout,
   listResellers,

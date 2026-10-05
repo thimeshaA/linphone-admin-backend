@@ -149,6 +149,42 @@ describe('Auth flow', () => {
     expect(res.status).toBe(401);
   });
 
+  test('7b. logout bumps token_version server-side, so a copy of the token made before logout is rejected even though it is still signature-valid and unexpired', async () => {
+    let tokenVersion = 0;
+    adminModel.findAdminByUsername.mockImplementation(async () => ({ ...TEST_ADMIN, token_version: tokenVersion }));
+    adminModel.getSessionInvalidationState.mockImplementation(async () => ({
+      password_changed_at: null,
+      token_version: tokenVersion,
+    }));
+    adminModel.incrementTokenVersion.mockImplementation(async () => {
+      tokenVersion += 1;
+    });
+
+    const sessionAgent = request.agent(app);
+    const loginRes = await sessionAgent
+      .post('/api/auth/login')
+      .send({ username: TEST_ADMIN.username, password: TEST_ADMIN_PASSWORD });
+    expect(loginRes.status).toBe(200);
+
+    // Simulates an attacker who copied the cookie while the session was
+    // still live, before the real owner logs out.
+    const stolenCookie = loginRes.headers['set-cookie'].find((c) => c.startsWith('token='));
+
+    const logoutRes = await sessionAgent.post('/api/auth/logout');
+    expect(logoutRes.status).toBe(200);
+    expect(adminModel.incrementTokenVersion).toHaveBeenCalledWith(TEST_ADMIN.id);
+
+    const replayRes = await request(app).get('/api/auth/me').set('Cookie', [stolenCookie]);
+    expect(replayRes.status).toBe(401);
+
+    // jest.clearAllMocks() (see afterEach) clears call history but not these
+    // mockImplementation()s - reset them explicitly so later tests don't
+    // inherit this test's stateful token_version closure.
+    adminModel.findAdminByUsername.mockReset();
+    adminModel.getSessionInvalidationState.mockReset();
+    adminModel.incrementTokenVersion.mockReset();
+  });
+
   test('8. change-password with the wrong currentPassword is rejected, password left unchanged', async () => {
     adminModel.findAdminByUsername.mockResolvedValue(TEST_ADMIN);
     const loginRes = await agent
@@ -316,7 +352,7 @@ describe('Auth flow', () => {
 
     // Simulate a password change that completed AFTER this token was issued.
     const changedAt = new Date(Date.now() + 2000);
-    adminModel.getPasswordChangedAt.mockResolvedValue(changedAt);
+    adminModel.getSessionInvalidationState.mockResolvedValue({ password_changed_at: changedAt, token_version: 0 });
 
     const afterChange = await firstAgent.get('/api/auth/me');
     expect(afterChange.status).toBe(401);

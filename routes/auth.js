@@ -18,7 +18,7 @@ const {
 const router = express.Router();
 
 router.post('/login', loginLimiter, login);
-router.post('/logout', logout);
+router.post('/logout', verifyToken, logout);
 router.get('/me', verifyToken, getCurrentAdmin);
 router.patch('/change-password', verifyToken, changePasswordLimiter, changePassword);
 router.post('/forgot-password', forgotPasswordLimiter, forgotPassword);

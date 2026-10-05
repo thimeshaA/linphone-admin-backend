@@ -1,4 +1,8 @@
-const { ensureAdditiveColumns, ADDITIVE_COLUMNS } = require('../scripts/ensure-additive-columns');
+const {
+  ensureAdditiveColumns,
+  ACCOUNTS_ADDITIVE_COLUMNS,
+  ADMINS_ADDITIVE_COLUMNS,
+} = require('../scripts/ensure-additive-columns');
 
 function fakePool(existingColumnNames) {
   return {
@@ -16,21 +20,21 @@ describe('ensureAdditiveColumns', () => {
   test('adds only the genuinely missing columns', async () => {
     const pool = fakePool(['creator_id', 'email']); // disabled_at/renewed_at missing
 
-    const added = await ensureAdditiveColumns(pool, 'flexisip_users_test');
+    const added = await ensureAdditiveColumns(pool, 'flexisip_users_test', 'accounts', ACCOUNTS_ADDITIVE_COLUMNS);
 
     expect(added.sort()).toEqual(['disabled_at', 'renewed_at']);
 
     const alterCalls = pool.query.mock.calls.filter((call) => call[0].includes('ALTER TABLE'));
     expect(alterCalls).toHaveLength(2);
     expect(alterCalls.map((call) => call[0])).toEqual(
-      expect.arrayContaining([ADDITIVE_COLUMNS.disabled_at, ADDITIVE_COLUMNS.renewed_at])
+      expect.arrayContaining([ACCOUNTS_ADDITIVE_COLUMNS.disabled_at, ACCOUNTS_ADDITIVE_COLUMNS.renewed_at])
     );
   });
 
   test('is a no-op when all 4 columns already exist', async () => {
     const pool = fakePool(['creator_id', 'email', 'disabled_at', 'renewed_at']);
 
-    const added = await ensureAdditiveColumns(pool, 'flexisip_users_test');
+    const added = await ensureAdditiveColumns(pool, 'flexisip_users_test', 'accounts', ACCOUNTS_ADDITIVE_COLUMNS);
 
     expect(added).toEqual([]);
     expect(pool.query.mock.calls.filter((call) => call[0].includes('ALTER TABLE'))).toHaveLength(0);
@@ -39,8 +43,28 @@ describe('ensureAdditiveColumns', () => {
   test('ignores unrelated existing columns (e.g. the original schema columns)', async () => {
     const pool = fakePool(['registerID', 'authid', 'domain', 'login', 'password', 'algorithm', 'phone']);
 
-    const added = await ensureAdditiveColumns(pool, 'flexisip_users_test');
+    const added = await ensureAdditiveColumns(pool, 'flexisip_users_test', 'accounts', ACCOUNTS_ADDITIVE_COLUMNS);
 
     expect(added.sort()).toEqual(['creator_id', 'disabled_at', 'email', 'renewed_at']);
+  });
+
+  test('adds token_version to admins when missing', async () => {
+    const pool = fakePool(['id', 'username', 'password_hash']);
+
+    const added = await ensureAdditiveColumns(pool, 'auth_admins_test', 'admins', ADMINS_ADDITIVE_COLUMNS);
+
+    expect(added).toEqual(['token_version']);
+    const alterCalls = pool.query.mock.calls.filter((call) => call[0].includes('ALTER TABLE'));
+    expect(alterCalls).toHaveLength(1);
+    expect(alterCalls[0][0]).toBe(ADMINS_ADDITIVE_COLUMNS.token_version);
+  });
+
+  test('is a no-op on admins when token_version already exists', async () => {
+    const pool = fakePool(['id', 'username', 'password_hash', 'token_version']);
+
+    const added = await ensureAdditiveColumns(pool, 'auth_admins_test', 'admins', ADMINS_ADDITIVE_COLUMNS);
+
+    expect(added).toEqual([]);
+    expect(pool.query.mock.calls.filter((call) => call[0].includes('ALTER TABLE'))).toHaveLength(0);
   });
 });
