@@ -20,6 +20,7 @@ const { getWalletByResellerId, adjustWalletBalance } = require('../models/wallet
 const { createLedgerEntry } = require('../models/walletLedgerModel');
 const { getRenewalCost } = require('../models/settingsModel');
 const { createNotification } = require('../models/notificationModel');
+const { createAuditLog } = require('../models/auditLogModel');
 const { sendMail } = require('../utils/mailer');
 const { renderBatchAccountRequestHtml, renderRenewalDeductionHtml } = require('../utils/emailTemplates');
 const { isValidEmail, isValidAuthid } = require('../utils/validators');
@@ -192,6 +193,14 @@ async function create(req, res) {
     console.error('Failed to send account credentials email:', err);
   }
 
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_create',
+    targetId: account.id,
+    ip: req.ip,
+  });
+
   return res.status(201).json(account);
 }
 
@@ -207,6 +216,14 @@ async function reassign(req, res) {
   if (!account) {
     return res.status(404).json({ error: 'Account not found' });
   }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_reassign',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json(account);
 }
@@ -403,6 +420,14 @@ async function renew(req, res) {
 
   await applyRenewalDeduction(account, req.admin.id, existingAccount.expires_at);
 
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_renew',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
+
   return res.json(account);
 }
 
@@ -411,6 +436,14 @@ async function disable(req, res) {
   if (!account) {
     return res.status(404).json({ error: 'Account not found' });
   }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_disable',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json(account);
 }
@@ -430,6 +463,14 @@ async function updatePassword(req, res) {
   const passwordHash = hashPassword(account.authid, account.domain, password);
   await updateAccountPassword(req.params.id, req.scopeFilter, passwordHash);
 
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_password_update',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
+
   return res.json({ message: 'Password updated successfully' });
 }
 
@@ -438,6 +479,14 @@ async function remove(req, res) {
   if (!deleted) {
     return res.status(404).json({ error: 'Account not found' });
   }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_delete',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json({ message: 'Account deleted successfully' });
 }

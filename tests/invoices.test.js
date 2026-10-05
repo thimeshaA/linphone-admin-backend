@@ -7,6 +7,7 @@ jest.mock('../models/walletModel');
 jest.mock('../models/walletLedgerModel');
 jest.mock('../models/invoiceModel');
 jest.mock('../models/notificationModel');
+jest.mock('../models/auditLogModel');
 jest.mock('../utils/mailer');
 
 const adminModel = require('../models/adminModel');

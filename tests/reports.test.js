@@ -4,6 +4,7 @@ const { TEST_ADMIN_PASSWORD, TEST_ADMIN, hashOf } = require('./helpers/fixtures'
 jest.mock('../models/reportsModel');
 jest.mock('../models/adminModel');
 jest.mock('../models/walletLedgerModel');
+jest.mock('../models/auditLogModel');
 jest.mock('../utils/mailer');
 
 const reportsModel = require('../models/reportsModel');

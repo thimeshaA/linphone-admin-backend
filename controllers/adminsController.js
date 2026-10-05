@@ -125,6 +125,14 @@ async function create(req, res) {
     });
   }
 
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'reseller_create',
+    targetId: reseller.id,
+    ip: req.ip,
+  });
+
   try {
     await sendMail({
       to: email,
@@ -147,6 +155,14 @@ async function renew(req, res) {
   if (!reseller) {
     return res.status(404).json({ error: 'Reseller not found' });
   }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'reseller_renew',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json(reseller);
 }
@@ -199,6 +215,14 @@ async function update(req, res) {
     }
   }
 
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'reseller_update',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
+
   return res.json(updated);
 }
 
@@ -244,6 +268,14 @@ async function remove(req, res) {
   if (!deleted) {
     return res.status(404).json({ error: 'Reseller not found' });
   }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'reseller_delete',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json({ message: 'Reseller deleted successfully' });
 }

@@ -166,6 +166,10 @@ describe('Admins (reseller management) flow', () => {
 
     resellerId = res.body.id;
     expect(resellerId).toBeDefined();
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'reseller_create', targetId: resellerId })
+    );
   });
 
   test('3. creating the same username again is rejected with 409', async () => {
@@ -226,6 +230,10 @@ describe('Admins (reseller management) flow', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('disabled');
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'reseller_update', targetId: String(resellerId) })
+    );
   });
 
   test('6b. attempting to change username via PATCH is rejected with a field-specific 400', async () => {
@@ -321,6 +329,10 @@ describe('Admins (reseller management) flow', () => {
     expect(res.body.status).toBe('active');
     expect(res.body.expired_at).toBeNull();
     expect(new Date(res.body.expires_at).toISOString()).toBe(futureDate);
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'reseller_renew', targetId: String(resellerId) })
+    );
   });
 
   test('11. renew with no body defaults expires_at to ~6 months out', async () => {
@@ -376,6 +388,10 @@ describe('Admins (reseller management) flow', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: 'Reseller deleted successfully' });
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'reseller_delete', targetId: String(resellerId) })
+    );
   });
 
   test('18. the deleted reseller no longer appears', async () => {

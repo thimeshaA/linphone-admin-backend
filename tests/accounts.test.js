@@ -7,6 +7,7 @@ jest.mock('../models/walletModel');
 jest.mock('../models/walletLedgerModel');
 jest.mock('../models/settingsModel');
 jest.mock('../models/notificationModel');
+jest.mock('../models/auditLogModel');
 jest.mock('../utils/mailer');
 
 const adminModel = require('../models/adminModel');
@@ -15,6 +16,7 @@ const walletModel = require('../models/walletModel');
 const walletLedgerModel = require('../models/walletLedgerModel');
 const settingsModel = require('../models/settingsModel');
 const notificationModel = require('../models/notificationModel');
+const auditLogModel = require('../models/auditLogModel');
 const mailer = require('../utils/mailer');
 const app = require('../index');
 
@@ -338,6 +340,10 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body.creator_id).toBe(resellerId);
     accountId = res.body.id;
     expect(mailer.sendMail).toHaveBeenCalledTimes(3);
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_create', targetId: accountId })
+    );
   });
 
   test('3a. an email-shaped authid is rejected with a field-specific 400', async () => {
@@ -514,6 +520,10 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('active');
     expect(new Date(res.body.expires_at).toISOString()).toBe(futureDate);
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_renew', targetId: String(accountId) })
+    );
   });
 
   test('7. as admin: renew with no body defaults expires_at to ~6 months out', async () => {
@@ -533,6 +543,10 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body.disabled_at).not.toBeNull();
     expect(res.body.status).toBe('disabled');
     expect(res.body.expires_at).toBe(expiresAtBefore);
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_disable', targetId: String(accountId) })
+    );
   });
 
   test('9. as admin: update password succeeds with no password in the response', async () => {
@@ -541,6 +555,14 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: 'Password updated successfully' });
     expect(res.body).not.toHaveProperty('password');
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: TEST_ADMIN.id,
+        action: 'account_password_update',
+        targetId: String(accountId),
+      })
+    );
   });
 
   test('9b. as admin: reassign an account to a different reseller updates creator_id', async () => {
@@ -550,6 +572,14 @@ describe('Accounts flow (admin + reseller)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.creator_id).toBe(reseller2Id);
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: TEST_ADMIN.id,
+        action: 'account_reassign',
+        targetId: String(reassignAccountId),
+      })
+    );
   });
 
   test('9c. as admin: reassign with a resellerId that is not a reseller is rejected with 400', async () => {
@@ -642,6 +672,9 @@ describe('Accounts flow (admin + reseller)', () => {
     const del1 = await adminAgent.delete(`/api/accounts/${accountId}`);
     expect(del1.status).toBe(200);
     expect(del1.body).toEqual({ message: 'Account deleted successfully' });
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_delete', targetId: String(accountId) })
+    );
 
     const del2 = await adminAgent.delete(`/api/accounts/${otherAccountId}`);
     expect(del2.status).toBe(200);
