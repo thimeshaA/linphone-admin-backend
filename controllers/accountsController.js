@@ -24,11 +24,45 @@ const { createAuditLog } = require('../models/auditLogModel');
 const { sendMail } = require('../utils/mailer');
 const { renderBatchAccountRequestHtml, renderRenewalDeductionHtml } = require('../utils/emailTemplates');
 const { isValidEmail, isValidAuthid } = require('../utils/validators');
+const { resolveQrEncryptionKey, encryptQrContent, QrKeyError } = require('../utils/qrPayload');
 
 const REQUEST_RECIPIENT = 'enigma-admin@prometeolk.com';
 
 function hashPassword(authid, domain, password) {
   return crypto.createHash('md5').update(`${authid}:${domain}:${password}`).digest('hex');
+}
+
+// Validated once up front, before any DB read or write for the request - a
+// misconfigured QR_ENCRYPTION_KEY must reject the request cleanly (no
+// account created, no password changed) rather than leave behind an account
+// or a new password whose QR could never be produced. The encryption call
+// made later (after the DB write) re-resolves the key itself; this is purely
+// a pre-flight check.
+function rejectIfQrKeyInvalid(res) {
+  try {
+    resolveQrEncryptionKey();
+    return false;
+  } catch (err) {
+    if (err instanceof QrKeyError) {
+      console.error('QR_ENCRYPTION_KEY is misconfigured:', err.message);
+      res.status(500).json({ error: 'Unable to process request: QR encryption key is not configured correctly' });
+      return true;
+    }
+    throw err;
+  }
+}
+
+// Called only after the account row already reflects the new credentials.
+// If this throws, the account/password change itself stays in effect - the
+// caller gets the normal success response without qrPayload, and an admin
+// can always reset the password later to obtain a fresh QR.
+function tryBuildQrPayload({ username, password }, context) {
+  try {
+    return encryptQrContent({ username, password });
+  } catch (err) {
+    console.error(`Failed to generate QR payload for ${context}:`, err.message);
+    return null;
+  }
 }
 
 // balanceUsd can be negative (a renewal always proceeds regardless of
@@ -162,6 +196,13 @@ async function create(req, res) {
     return res.status(400).json({ errors });
   }
 
+  res.set('Cache-Control', 'no-store');
+  res.set('Pragma', 'no-cache');
+
+  if (rejectIfQrKeyInvalid(res)) {
+    return undefined;
+  }
+
   const { error: resellerError } = await validateResellerId(resellerId);
   if (resellerError) {
     return res.status(400).json({ error: resellerError });
@@ -201,7 +242,20 @@ async function create(req, res) {
     ip: req.ip,
   });
 
-  return res.status(201).json(account);
+  const qrPayload = tryBuildQrPayload({ username: account.authid, password }, `new account ${account.id}`);
+  const responseBody = { ...account };
+  if (qrPayload) {
+    responseBody.qrPayload = qrPayload;
+    await createAuditLog({
+      actorId: req.admin.id,
+      actorRole: req.admin.role,
+      action: 'account_qr_issued',
+      targetId: account.id,
+      ip: req.ip,
+    });
+  }
+
+  return res.status(201).json(responseBody);
 }
 
 async function reassign(req, res) {
@@ -455,6 +509,13 @@ async function updatePassword(req, res) {
     return res.status(400).json({ error: 'password is required' });
   }
 
+  res.set('Cache-Control', 'no-store');
+  res.set('Pragma', 'no-cache');
+
+  if (rejectIfQrKeyInvalid(res)) {
+    return undefined;
+  }
+
   const account = await getAccountById(req.params.id, req.scopeFilter);
   if (!account) {
     return res.status(404).json({ error: 'Account not found' });
@@ -471,7 +532,20 @@ async function updatePassword(req, res) {
     ip: req.ip,
   });
 
-  return res.json({ message: 'Password updated successfully' });
+  const qrPayload = tryBuildQrPayload({ username: account.authid, password }, `account ${req.params.id} password change`);
+  const responseBody = { message: 'Password updated successfully' };
+  if (qrPayload) {
+    responseBody.qrPayload = qrPayload;
+    await createAuditLog({
+      actorId: req.admin.id,
+      actorRole: req.admin.role,
+      action: 'account_qr_issued',
+      targetId: req.params.id,
+      ip: req.ip,
+    });
+  }
+
+  return res.json(responseBody);
 }
 
 async function remove(req, res) {

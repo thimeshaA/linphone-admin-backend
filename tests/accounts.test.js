@@ -341,8 +341,16 @@ describe('Accounts flow (admin + reseller)', () => {
     accountId = res.body.id;
     expect(mailer.sendMail).toHaveBeenCalledTimes(3);
 
+    expect(typeof res.body.qrPayload).toBe('string');
+    expect(res.body.qrPayload).not.toContain('AccountPass123!');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['pragma']).toBe('no-cache');
+
     expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_create', targetId: accountId })
+    );
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_qr_issued', targetId: accountId })
     );
   });
 
@@ -496,20 +504,22 @@ describe('Accounts flow (admin + reseller)', () => {
     await adminAgent.delete(`/api/accounts/${res.body.id}`);
   });
 
-  test('4. as admin: list accounts, confirm created_by is present and correct', async () => {
+  test('4. as admin: list accounts, confirm created_by is present and correct, no qrPayload', async () => {
     const res = await adminAgent.get('/api/accounts');
 
     expect(res.status).toBe(200);
     const created = res.body.find((a) => a.id === accountId);
     expect(created).toBeDefined();
     expect(created.created_by).toBe(resellerUsername);
+    expect(created).not.toHaveProperty('qrPayload');
   });
 
-  test('5. as admin: get account by id', async () => {
+  test('5. as admin: get account by id, no qrPayload', async () => {
     const res = await adminAgent.get(`/api/accounts/${accountId}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ id: accountId, authid: accountAuthid, domain: accountDomain });
+    expect(res.body).not.toHaveProperty('qrPayload');
   });
 
   test('6. as admin: renew with a custom future date resets computed status to active', async () => {
@@ -549,12 +559,15 @@ describe('Accounts flow (admin + reseller)', () => {
     );
   });
 
-  test('9. as admin: update password succeeds with no password in the response', async () => {
+  test('9. as admin: update password succeeds with no plaintext password in the response, but a qrPayload', async () => {
     const res = await adminAgent.patch(`/api/accounts/${accountId}/password`).send({ password: 'NewAcctPass456!' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ message: 'Password updated successfully' });
+    expect(res.body.message).toBe('Password updated successfully');
     expect(res.body).not.toHaveProperty('password');
+    expect(typeof res.body.qrPayload).toBe('string');
+    expect(res.body.qrPayload).not.toContain('NewAcctPass456!');
+    expect(res.headers['cache-control']).toBe('no-store');
 
     expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1029,5 +1042,155 @@ describe('Renewal wallet deduction (Phase 2)', () => {
 
       expect(walletsByResellerId[propReseller.id].balance_usd).toBe(balanceBefore - 30);
     });
+  });
+});
+
+describe('QR payload issuance', () => {
+  const adminAgent = request.agent(app);
+  let qrReseller1;
+  let qrReseller2;
+  let qrAccount1;
+  let originalQrKey;
+  const resellerPassword = 'ResellerPass123!';
+
+  beforeAll(async () => {
+    originalQrKey = process.env.QR_ENCRYPTION_KEY;
+
+    const loginRes = await adminAgent
+      .post('/api/auth/login')
+      .send({ username: TEST_ADMIN.username, password: TEST_ADMIN_PASSWORD });
+    expect(loginRes.status).toBe(200);
+
+    const r1 = await adminAgent
+      .post('/api/admins')
+      .send({ username: `qr_r1_${Date.now()}`, password: resellerPassword, email: `qr_r1_${Date.now()}@example.com` });
+    expect(r1.status).toBe(201);
+    qrReseller1 = r1.body;
+
+    const r2 = await adminAgent
+      .post('/api/admins')
+      .send({ username: `qr_r2_${Date.now()}`, password: resellerPassword, email: `qr_r2_${Date.now()}@example.com` });
+    expect(r2.status).toBe(201);
+    qrReseller2 = r2.body;
+
+    const acc1 = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('qr'),
+      domain: 'test.example.com',
+      password: 'AccountPass123!',
+      phone: '+15551230000',
+      resellerId: qrReseller1.id,
+      email: 'qr1@example.com',
+    });
+    expect(acc1.status).toBe(201);
+    qrAccount1 = acc1.body;
+  });
+
+  afterEach(() => {
+    process.env.QR_ENCRYPTION_KEY = originalQrKey;
+  });
+
+  test('a missing QR_ENCRYPTION_KEY rejects account creation with 500 before any DB write', async () => {
+    delete process.env.QR_ENCRYPTION_KEY;
+    const createCallsBefore = accountModel.createAccount.mock.calls.length;
+
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('qrfail'),
+      domain: 'test.example.com',
+      password: 'AccountPass123!',
+      phone: '+15551230001',
+      resellerId: qrReseller1.id,
+      email: 'qrfail@example.com',
+    });
+
+    expect(res.status).toBe(500);
+    expect(accountModel.createAccount.mock.calls.length).toBe(createCallsBefore);
+  });
+
+  test('an invalid (non-base64) QR_ENCRYPTION_KEY rejects a password change with 500 before any DB write', async () => {
+    process.env.QR_ENCRYPTION_KEY = 'not-valid-base64!!';
+    const updateCallsBefore = accountModel.updateAccountPassword.mock.calls.length;
+
+    const res = await adminAgent
+      .patch(`/api/accounts/${qrAccount1.id}/password`)
+      .send({ password: 'AnotherPass456!' });
+
+    expect(res.status).toBe(500);
+    expect(accountModel.updateAccountPassword.mock.calls.length).toBe(updateCallsBefore);
+  });
+
+  test('a successful password change returns a qrPayload, logs account_qr_issued, and never logs the password or payload', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const newPassword = 'Brand-New-Pass-789!';
+    const res = await adminAgent.patch(`/api/accounts/${qrAccount1.id}/password`).send({ password: newPassword });
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.qrPayload).toBe('string');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['pragma']).toBe('no-cache');
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'account_qr_issued', targetId: String(qrAccount1.id) })
+    );
+
+    const auditCallsText = JSON.stringify(auditLogModel.createAuditLog.mock.calls);
+    expect(auditCallsText).not.toContain(newPassword);
+    expect(auditCallsText).not.toContain(res.body.qrPayload);
+
+    const loggedText = JSON.stringify([...errorSpy.mock.calls, ...logSpy.mock.calls, ...warnSpy.mock.calls]);
+    expect(loggedText).not.toContain(newPassword);
+    expect(loggedText).not.toContain(res.body.qrPayload);
+
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  test("a reseller cannot obtain a QR payload for another reseller's account via password change", async () => {
+    const reseller1Agent = request.agent(app);
+    const loginRes = await reseller1Agent
+      .post('/api/auth/login')
+      .send({ username: qrReseller1.username, password: resellerPassword });
+    expect(loginRes.status).toBe(200);
+
+    const acc2 = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('qr2'),
+      domain: 'test.example.com',
+      password: 'AccountPass123!',
+      phone: '+15551230002',
+      resellerId: qrReseller2.id,
+      email: 'qr2@example.com',
+    });
+    expect(acc2.status).toBe(201);
+
+    const updateCallsBefore = accountModel.updateAccountPassword.mock.calls.length;
+    const res = await reseller1Agent
+      .patch(`/api/accounts/${acc2.body.id}/password`)
+      .send({ password: 'ShouldNotWork123!' });
+
+    expect(res.status).toBe(404);
+    expect(res.body).not.toHaveProperty('qrPayload');
+    expect(accountModel.updateAccountPassword.mock.calls.length).toBe(updateCallsBefore);
+  });
+
+  test('a reseller still cannot create accounts directly', async () => {
+    const reseller1Agent = request.agent(app);
+    const loginRes = await reseller1Agent
+      .post('/api/auth/login')
+      .send({ username: qrReseller1.username, password: resellerPassword });
+    expect(loginRes.status).toBe(200);
+
+    const res = await reseller1Agent.post('/api/accounts').send({
+      authid: uniqueAuthid('qrres'),
+      domain: 'test.example.com',
+      password: 'AccountPass123!',
+      phone: '+15551230003',
+      resellerId: qrReseller1.id,
+      email: 'qrres@example.com',
+    });
+
+    expect(res.status).toBe(403);
   });
 });
