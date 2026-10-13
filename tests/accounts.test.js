@@ -1,5 +1,6 @@
 const request = require('supertest');
 const { TEST_ADMIN_PASSWORD, TEST_ADMIN } = require('./helpers/fixtures');
+const { SIP_REALM } = require('../utils/sipRealm');
 
 jest.mock('../models/adminModel');
 jest.mock('../models/accountModel');
@@ -285,7 +286,7 @@ describe('Accounts flow (admin + reseller)', () => {
 
   let accountId;
   const accountAuthid = uniqueAuthid('t');
-  const accountDomain = 'test.example.com';
+  const accountDomain = SIP_REALM;
 
   let otherAccountId;
   let reassignAccountId;
@@ -384,10 +385,9 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body.errors).not.toHaveProperty('authid');
   });
 
-  test('3c. reusing the same authid on a different domain is rejected with 409', async () => {
+  test('3c. reusing the same authid (domain omitted, defaults to the realm) is rejected with 409', async () => {
     const res = await adminAgent.post('/api/accounts').send({
       authid: accountAuthid,
-      domain: 'a-completely-different-domain.example.com',
       password: 'AccountPass123!',
       phone: '+15551234567',
       resellerId,
@@ -396,6 +396,23 @@ describe('Accounts flow (admin + reseller)', () => {
 
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: 'An account with this authid already exists' });
+  });
+
+  test('3c2. a domain other than the SIP realm is rejected with 400 and creates nothing', async () => {
+    const createCallsBefore = accountModel.createAccount.mock.calls.length;
+
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('t'),
+      domain: 'a-completely-different-domain.example.com',
+      password: 'AccountPass123!',
+      phone: '+15551234567',
+      resellerId,
+      email: 'wrongdomain@example.com',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('domain');
+    expect(accountModel.createAccount.mock.calls.length).toBe(createCallsBefore);
   });
 
   test('3d. resellerId referencing a non-reseller admin is rejected with 400', async () => {
@@ -640,7 +657,25 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body.id).toBe(accountId);
   });
 
-  test('13. as reseller: get/renew/disable an account they do not own each return 404', async () => {
+  test('12b. as reseller: updating the password of the account they own succeeds, with a qrPayload', async () => {
+    const res = await resellerAgent.patch(`/api/accounts/${accountId}/password`).send({ password: 'ResellerSetPass789!' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe('Password updated successfully');
+    expect(typeof res.body.qrPayload).toBe('string');
+    expect(res.body.qrPayload).not.toContain('ResellerSetPass789!');
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: resellerId,
+        actorRole: 'reseller',
+        action: 'account_password_update',
+        targetId: String(accountId),
+      })
+    );
+  });
+
+  test('13. as reseller: get/renew/disable/change-password of an account they do not own each return 404', async () => {
     const getRes = await resellerAgent.get(`/api/accounts/${otherAccountId}`);
     expect(getRes.status).toBe(404);
 
@@ -649,6 +684,12 @@ describe('Accounts flow (admin + reseller)', () => {
 
     const disableRes = await resellerAgent.patch(`/api/accounts/${otherAccountId}/disable`);
     expect(disableRes.status).toBe(404);
+
+    const passwordRes = await resellerAgent
+      .patch(`/api/accounts/${otherAccountId}/password`)
+      .send({ password: 'ShouldNotWork123!' });
+    expect(passwordRes.status).toBe(404);
+    expect(passwordRes.body).not.toHaveProperty('qrPayload');
   });
 
   test('13b. as reseller: creating an account directly is forbidden', async () => {
@@ -717,7 +758,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
   async function createAccount({ authid, resellerId }) {
     const res = await adminAgent.post('/api/accounts').send({
       authid,
-      domain: 'test.example.com',
+      domain: SIP_REALM,
       password: 'AccountPass123!',
       phone: '+15551234567',
       resellerId,
@@ -800,7 +841,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
     accountsById[unassignedId] = {
       id: unassignedId,
       authid: uniqueAuthid('u'),
-      domain: 'test.example.com',
+      domain: SIP_REALM,
       phone: '+15550000000',
       created_at: new Date(),
       expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
@@ -1075,7 +1116,7 @@ describe('QR payload issuance', () => {
 
     const acc1 = await adminAgent.post('/api/accounts').send({
       authid: uniqueAuthid('qr'),
-      domain: 'test.example.com',
+      domain: SIP_REALM,
       password: 'AccountPass123!',
       phone: '+15551230000',
       resellerId: qrReseller1.id,
@@ -1095,7 +1136,7 @@ describe('QR payload issuance', () => {
 
     const res = await adminAgent.post('/api/accounts').send({
       authid: uniqueAuthid('qrfail'),
-      domain: 'test.example.com',
+      domain: SIP_REALM,
       password: 'AccountPass123!',
       phone: '+15551230001',
       resellerId: qrReseller1.id,
@@ -1157,7 +1198,7 @@ describe('QR payload issuance', () => {
 
     const acc2 = await adminAgent.post('/api/accounts').send({
       authid: uniqueAuthid('qr2'),
-      domain: 'test.example.com',
+      domain: SIP_REALM,
       password: 'AccountPass123!',
       phone: '+15551230002',
       resellerId: qrReseller2.id,
@@ -1184,7 +1225,7 @@ describe('QR payload issuance', () => {
 
     const res = await reseller1Agent.post('/api/accounts').send({
       authid: uniqueAuthid('qrres'),
-      domain: 'test.example.com',
+      domain: SIP_REALM,
       password: 'AccountPass123!',
       phone: '+15551230003',
       resellerId: qrReseller1.id,
@@ -1192,5 +1233,106 @@ describe('QR payload issuance', () => {
     });
 
     expect(res.status).toBe(403);
+  });
+});
+
+describe('SIP password hashing (SHA-256, matches production exactly)', () => {
+  const adminAgent = request.agent(app);
+  let hashReseller;
+  let vector1AccountId;
+
+  beforeAll(async () => {
+    const loginRes = await adminAgent
+      .post('/api/auth/login')
+      .send({ username: TEST_ADMIN.username, password: TEST_ADMIN_PASSWORD });
+    expect(loginRes.status).toBe(200);
+
+    const r = await adminAgent.post('/api/admins').send({
+      username: `hash_r_${Date.now()}`,
+      password: 'ResellerPass123!',
+      email: `hash_r_${Date.now()}@example.com`,
+    });
+    expect(r.status).toBe(201);
+    hashReseller = r.body;
+  });
+
+  test('vector 1: account creation reproduces the published SHA-256 hash exactly', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: 'testuser01',
+      password: 'testpass123',
+      phone: '+15551112222',
+      resellerId: hashReseller.id,
+      email: 'vector1@example.com',
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.domain).toBe(SIP_REALM);
+    vector1AccountId = res.body.id;
+
+    const createCall = accountModel.createAccount.mock.calls.find((call) => call[0].authid === 'testuser01');
+    expect(createCall[0].passwordHash).toBe('a71cd6d4175fd3fa6e9b0e232766222b3abc09f5a6c6a794752d2fc820eec866');
+  });
+
+  test('vector 2 (non-ASCII, UTF-8): a password change on the same account reproduces the published hash exactly', async () => {
+    const res = await adminAgent
+      .patch(`/api/accounts/${vector1AccountId}/password`)
+      .send({ password: 'Tëst-Päss✓' });
+
+    expect(res.status).toBe(200);
+
+    const matchingCalls = accountModel.updateAccountPassword.mock.calls.filter(
+      (call) => String(call[0]) === String(vector1AccountId)
+    );
+    const lastCall = matchingCalls[matchingCalls.length - 1];
+    expect(lastCall[2]).toBe('86fc2dc72334a33bd838f932b4a6570861ddb2562b65dd9d9dea3067c2fc41c0');
+  });
+
+  test('vector 3: a 20-character authid (the real column limit) reproduces the published hash exactly', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: 'longusername_20chars',
+      password: 'A1b2-C3d4!',
+      phone: '+15553334444',
+      resellerId: hashReseller.id,
+      email: 'vector3@example.com',
+    });
+
+    expect(res.status).toBe(201);
+
+    const createCall = accountModel.createAccount.mock.calls.find(
+      (call) => call[0].authid === 'longusername_20chars'
+    );
+    expect(createCall[0].passwordHash).toBe('1cc3e45187ca7d14b271cbc320bf25c008de995925c891651f6d788c4d70afdc');
+  });
+
+  test('nothing logs the plaintext password or the hashed string during creation or password change', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const plaintext = 'LogCheckPass999!';
+    const createRes = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('logchk'),
+      password: plaintext,
+      phone: '+15559998888',
+      resellerId: hashReseller.id,
+      email: 'logcheck@example.com',
+    });
+    expect(createRes.status).toBe(201);
+
+    const changeRes = await adminAgent
+      .patch(`/api/accounts/${createRes.body.id}/password`)
+      .send({ password: 'LogCheckPass999New!' });
+    expect(changeRes.status).toBe(200);
+
+    const loggedText = JSON.stringify([...errorSpy.mock.calls, ...logSpy.mock.calls, ...warnSpy.mock.calls]);
+    expect(loggedText).not.toContain(plaintext);
+    expect(loggedText).not.toContain('LogCheckPass999New!');
+    expect(loggedText).not.toContain(
+      JSON.stringify({ v: 1, username: createRes.body.authid, password: plaintext }).slice(1, -1)
+    );
+
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });

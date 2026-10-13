@@ -103,10 +103,11 @@ describe('accountModel (against a fake accounts table)', () => {
       }
 
       if (sql.startsWith('UPDATE accounts SET password')) {
-        const [password, id] = params;
+        const [password, algorithm, id] = params;
         const row = rowsById[id];
         if (!row) return [{ affectedRows: 0 }];
         row.password = password;
+        row.algorithm = algorithm;
         return [{ affectedRows: 1 }];
       }
 
@@ -189,7 +190,7 @@ describe('accountModel (against a fake accounts table)', () => {
       expect(typeof account.id).toBe('number');
     });
 
-    test('sets login equal to authid and algorithm to MD5, regardless of input', async () => {
+    test('sets login equal to authid and algorithm to SHA-256, regardless of input', async () => {
       const account = await createAccount({
         authid: 'acme_account',
         domain: 'sip.example.com',
@@ -201,7 +202,7 @@ describe('accountModel (against a fake accounts table)', () => {
       });
 
       expect(rowsById[account.id].login).toBe('acme_account');
-      expect(rowsById[account.id].algorithm).toBe('MD5');
+      expect(rowsById[account.id].algorithm).toBe('SHA-256');
     });
 
     test('writes phone through to the row', async () => {
@@ -455,7 +456,7 @@ describe('accountModel (against a fake accounts table)', () => {
     expect(reassigned.creator_id).toBe(42);
   });
 
-  test('updateAccountPassword updates the stored password hash', async () => {
+  test('updateAccountPassword updates the stored password hash and rewrites algorithm to SHA-256', async () => {
     const created = await createAccount({
       authid: 'passme',
       domain: 'sip.example.com',
@@ -465,9 +466,12 @@ describe('accountModel (against a fake accounts table)', () => {
       creatorId: 7,
       email: 'passme@example.com',
     });
+    // Simulates a legacy row still carrying the old MD5 algorithm.
+    rowsById[created.id].algorithm = 'MD5';
 
     expect(await updateAccountPassword(created.id, {}, 'new-hash')).toBe(true);
     expect(rowsById[created.id].password).toBe('new-hash');
+    expect(rowsById[created.id].algorithm).toBe('SHA-256');
   });
 
   test('deleteAccount removes the row and returns false on a second delete', async () => {

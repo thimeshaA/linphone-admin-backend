@@ -25,11 +25,16 @@ const { sendMail } = require('../utils/mailer');
 const { renderBatchAccountRequestHtml, renderRenewalDeductionHtml } = require('../utils/emailTemplates');
 const { isValidEmail, isValidAuthid } = require('../utils/validators');
 const { resolveQrEncryptionKey, encryptQrContent, QrKeyError } = require('../utils/qrPayload');
+const { SIP_REALM } = require('../utils/sipRealm');
 
 const REQUEST_RECIPIENT = 'enigma-admin@prometeolk.com';
 
-function hashPassword(authid, domain, password) {
-  return crypto.createHash('md5').update(`${authid}:${domain}:${password}`).digest('hex');
+// Matches Ahmed's production hashing exactly: SHA-256 of
+// "<authid>:<realm>:<password>", UTF-8, lowercase hex. The realm is always
+// SIP_REALM, regardless of what domain (if any) the caller sent - see the
+// domain validation in create().
+function hashPassword(authid, password) {
+  return crypto.createHash('sha256').update(`${authid}:${SIP_REALM}:${password}`, 'utf8').digest('hex');
 }
 
 // Validated once up front, before any DB read or write for the request - a
@@ -176,8 +181,11 @@ async function create(req, res) {
       'authid is required (1-20 characters) and may only contain letters, digits, ".", "_" and "-"';
   }
 
-  if (!domain) {
-    errors.domain = 'domain is required';
+  // domain is optional and, when sent, exists only so a caller can confirm
+  // what it'll be - there is one real SIP realm (SIP_REALM) and the account
+  // is always created against it, never against whatever the caller passed.
+  if (domain !== undefined && domain !== null && domain !== SIP_REALM) {
+    errors.domain = `domain must be "${SIP_REALM}" if provided`;
   }
 
   if (!password) {
@@ -215,8 +223,8 @@ async function create(req, res) {
 
   const account = await createAccount({
     authid,
-    domain,
-    passwordHash: hashPassword(authid, domain, password),
+    domain: SIP_REALM,
+    passwordHash: hashPassword(authid, password),
     phone,
     expiresAt: expires_at || defaultExpiresAt(),
     creatorId: resellerId,
@@ -521,7 +529,7 @@ async function updatePassword(req, res) {
     return res.status(404).json({ error: 'Account not found' });
   }
 
-  const passwordHash = hashPassword(account.authid, account.domain, password);
+  const passwordHash = hashPassword(account.authid, password);
   await updateAccountPassword(req.params.id, req.scopeFilter, passwordHash);
 
   await createAuditLog({

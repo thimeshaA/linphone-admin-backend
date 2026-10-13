@@ -97,13 +97,13 @@ async function createAccount({ authid, domain, passwordHash, phone, expiresAt, c
   const scadenza = toDateOnlyString(expiresAt);
 
   // login always mirrors authid (no separate app-facing field for it);
-  // algorithm is always written explicitly - never rely on the column's
-  // 'SHA-256' default, since password hashes here are MD5 (see hashPassword
-  // in accountsController.js).
+  // algorithm is always written explicitly as 'SHA-256' (see hashPassword in
+  // accountsController.js, matching Ahmed's production hashing exactly) -
+  // never rely on the column's own default, even though it happens to agree.
   const [result] = await flexisipPool.query(
     `INSERT INTO accounts (authid, login, domain, password, algorithm, phone, creazione, scadenza, creator_id, email)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [authid, authid, domain, passwordHash, 'MD5', phone, creazione, scadenza, creatorId, email]
+    [authid, authid, domain, passwordHash, 'SHA-256', phone, creazione, scadenza, creatorId, email]
   );
 
   const [rows] = await flexisipPool.query(`SELECT ${PUBLIC_COLUMNS} FROM accounts WHERE registerID = ?`, [
@@ -146,11 +146,14 @@ async function disableAccount(id, scopeFilter) {
   return getAccountById(id, scopeFilter);
 }
 
+// algorithm is rewritten explicitly on every password change too, same as on
+// creation - never rely on whatever the row already had (e.g. a legacy
+// 'MD5' row gets corrected to 'SHA-256' the moment its password is reset).
 async function updateAccountPassword(id, scopeFilter, passwordHash) {
   const { condition, params } = buildScopedWhereClause(scopeFilter);
   const [result] = await flexisipPool.query(
-    `UPDATE accounts SET password = ? WHERE registerID = ? AND ${condition}`,
-    [passwordHash, id, ...params]
+    `UPDATE accounts SET password = ?, algorithm = ? WHERE registerID = ? AND ${condition}`,
+    [passwordHash, 'SHA-256', id, ...params]
   );
 
   return result.affectedRows > 0;
