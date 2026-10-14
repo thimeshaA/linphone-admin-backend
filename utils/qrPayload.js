@@ -1,6 +1,5 @@
 const crypto = require('crypto');
 
-const VERSION_PREFIX = 'v1.';
 const NONCE_LENGTH = 12;
 const TAG_LENGTH = 16;
 const KEY_LENGTH = 32;
@@ -43,52 +42,43 @@ function resolveQrEncryptionKey() {
   return key;
 }
 
-function toBase64Url(buffer) {
-  return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function fromBase64Url(value) {
-  const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
-  return Buffer.from(padded, 'base64');
-}
-
-// The one place the plaintext QR structure is defined - Ahmed's final JSON
-// shape is still pending, so every caller goes through this function instead
-// of building the object inline, keeping the eventual change to one spot.
+// The one place the plaintext QR structure is defined - exactly the two
+// members Ahmed's Swift app expects (it turns the decrypted JSON into a
+// String:String dictionary, so any extra field or non-string value breaks
+// it). Every caller goes through this function rather than building the
+// object inline.
 function buildQrContent({ username, password }) {
-  return { v: 1, username, password };
+  return { username, password };
 }
 
-// `nonce` is only ever overridden by tests reproducing the fixed test
-// vector - real callers always let this default to a fresh random value,
-// never reused across calls.
-function encryptQrContent({ username, password }, { nonce } = {}) {
+// Low-level primitive: AES-256-GCM, no AAD, standard (padded) base64 of
+// nonce || ciphertext || tag - matching Ahmed's Python encrypt_string and
+// readable directly by Swift's AES.GCM.SealedBox(combined:). `nonce` is only
+// ever overridden by tests reproducing a fixed vector; real callers always
+// let this default to a fresh random value, never reused across calls.
+function encryptString(plaintext, { nonce } = {}) {
   const key = resolveQrEncryptionKey();
   const iv = nonce || crypto.randomBytes(NONCE_LENGTH);
   if (iv.length !== NONCE_LENGTH) {
     throw new QrKeyError(`QR nonce must be ${NONCE_LENGTH} bytes`);
   }
 
-  const plaintext = Buffer.from(JSON.stringify(buildQrContent({ username, password })), 'utf8');
+  const plaintextBuf = Buffer.from(plaintext, 'utf8');
 
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const ciphertext = Buffer.concat([cipher.update(plaintextBuf), cipher.final()]);
   const tag = cipher.getAuthTag();
 
-  // nonce || ciphertext || tag, deliberately - Apple's CryptoKit
-  // AES.GCM.SealedBox(combined:) reads this exact layout directly.
-  const combined = Buffer.concat([iv, ciphertext, tag]);
-  return VERSION_PREFIX + toBase64Url(combined);
+  return Buffer.concat([iv, ciphertext, tag]).toString('base64');
 }
 
-function decryptQrContent(text) {
-  if (typeof text !== 'string' || !text.startsWith(VERSION_PREFIX)) {
-    throw new QrKeyError('Unsupported QR payload version');
+function decryptString(text) {
+  if (typeof text !== 'string') {
+    throw new QrKeyError('QR payload must be a string');
   }
 
   const key = resolveQrEncryptionKey();
-  const combined = fromBase64Url(text.slice(VERSION_PREFIX.length));
+  const combined = Buffer.from(text, 'base64');
   if (combined.length < NONCE_LENGTH + TAG_LENGTH) {
     throw new QrKeyError('QR payload is malformed');
   }
@@ -100,13 +90,23 @@ function decryptQrContent(text) {
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAuthTag(tag);
   const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  return JSON.parse(plaintext.toString('utf8'));
+  return plaintext.toString('utf8');
+}
+
+function encryptQrContent({ username, password }, options) {
+  return encryptString(JSON.stringify(buildQrContent({ username, password })), options);
+}
+
+function decryptQrContent(text) {
+  return JSON.parse(decryptString(text));
 }
 
 module.exports = {
   QrKeyError,
   resolveQrEncryptionKey,
   buildQrContent,
+  encryptString,
+  decryptString,
   encryptQrContent,
   decryptQrContent,
 };
