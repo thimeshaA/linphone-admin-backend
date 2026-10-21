@@ -48,23 +48,38 @@ describe('ensureAdditiveColumns', () => {
     expect(added.sort()).toEqual(['creator_id', 'disabled_at', 'email', 'renewed_at']);
   });
 
-  test('adds token_version to admins when missing', async () => {
+  test('adds token_version/address/license_detail/phone to admins when missing', async () => {
     const pool = fakePool(['id', 'username', 'password_hash']);
 
     const added = await ensureAdditiveColumns(pool, 'auth_admins_test', 'admins', ADMINS_ADDITIVE_COLUMNS);
 
-    expect(added).toEqual(['token_version']);
+    expect(added.sort()).toEqual(['address', 'license_detail', 'phone', 'token_version']);
     const alterCalls = pool.query.mock.calls.filter((call) => call[0].includes('ALTER TABLE'));
-    expect(alterCalls).toHaveLength(1);
-    expect(alterCalls[0][0]).toBe(ADMINS_ADDITIVE_COLUMNS.token_version);
+    expect(alterCalls).toHaveLength(4);
+    expect(alterCalls.map((call) => call[0])).toEqual(
+      expect.arrayContaining([
+        ADMINS_ADDITIVE_COLUMNS.token_version,
+        ADMINS_ADDITIVE_COLUMNS.address,
+        ADMINS_ADDITIVE_COLUMNS.license_detail,
+        ADMINS_ADDITIVE_COLUMNS.phone,
+      ])
+    );
   });
 
-  test('is a no-op on admins when token_version already exists', async () => {
-    const pool = fakePool(['id', 'username', 'password_hash', 'token_version']);
+  test('is a no-op on admins when all 4 columns already exist', async () => {
+    const pool = fakePool(['id', 'username', 'password_hash', 'token_version', 'address', 'license_detail', 'phone']);
 
     const added = await ensureAdditiveColumns(pool, 'auth_admins_test', 'admins', ADMINS_ADDITIVE_COLUMNS);
 
     expect(added).toEqual([]);
     expect(pool.query.mock.calls.filter((call) => call[0].includes('ALTER TABLE'))).toHaveLength(0);
+  });
+
+  test('adds only the genuinely missing columns on admins', async () => {
+    const pool = fakePool(['id', 'username', 'password_hash', 'token_version', 'address']);
+
+    const added = await ensureAdditiveColumns(pool, 'auth_admins_test', 'admins', ADMINS_ADDITIVE_COLUMNS);
+
+    expect(added.sort()).toEqual(['license_detail', 'phone']);
   });
 });

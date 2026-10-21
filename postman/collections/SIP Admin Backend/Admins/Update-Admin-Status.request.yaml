@@ -14,10 +14,10 @@ body:
     }
 description: |-
   ## Purpose
-  Enables or disables a reseller account. A disabled reseller can no longer log in to the system.
+  Updates a reseller's status, email, and/or company billing profile (address, license detail, phone). Despite the request name, this is the general-purpose reseller edit endpoint - not status-only.
 
   ## Use Case
-  Called when the admin needs to suspend a reseller's access - for example, due to a billing issue - or to re-enable them after the issue is resolved.
+  Enabling/disabling access (e.g. for a billing issue), correcting a contact email, or filling in/editing the company details shown on invoice PDFs' "Billed To" block.
 
   ## Authentication
   - Requires login (`verifyToken` cookie must be present and valid).
@@ -26,15 +26,23 @@ description: |-
 
   ## Request Requirements
   - **URL param:** `:id` - the UUID of the reseller to update.
-  - **Required body field:**
+  - At least one of the fields below is required; any combination may be sent together in one request.
     - `status` (string) - must be `"active"` or `"disabled"`.
-  - No other fields can be changed through this endpoint (no username, password, or role changes).
+    - `email` (string) - must be a valid, not-already-taken email.
+    - `address` (string, or `null` to clear) - company billing address, shown on invoice PDFs.
+    - `license_detail` (string, max 255 chars, or `null` to clear) - shown on invoice PDFs as "License: ...".
+    - `phone` (string, max 20 chars, or `null` to clear) - company contact phone, shown on invoice PDFs.
+  - `username` cannot be changed through this endpoint (or at all, after creation) - sending it is rejected with a field-specific 400.
 
   ## Responses
-  - **200 OK** - reseller status updated successfully.
+  - **200 OK** - reseller updated successfully; response reflects every field changed in this request.
+  - **400 Bad Request** - no recognized field provided, `status` is not `"active"`/`"disabled"`, `email` is malformed, `license_detail`/`phone` exceed their max length, or `username` was sent.
   - **404 Not Found** - no reseller with that id exists.
+  - **409 Conflict** - `email` is already used by a different admin/reseller.
   - **403 Forbidden** - caller is a reseller.
   - **401 Unauthorized** - missing or invalid auth token.
 
   ## Notes
   Disabling a reseller prevents login but does not affect the SIP accounts they have already created. The `disabled` status is checked at login time, after password validation.
+
+  `address`/`license_detail`/`phone` are fetched fresh (not snapshotted) every time an invoice PDF is generated - a change here affects *every* invoice for that reseller, including already-sent ones, the next time its PDF is generated or re-downloaded.

@@ -14,7 +14,10 @@ body:
       "password": "securepassword",
       "email": "reseller@example.com",
       "expires_at": null,
-      "initialCredit": 0
+      "initialCredit": 0,
+      "address": "123 Business Ave, Suite 400",
+      "license_detail": "LIC-00042",
+      "phone": "+15551234567"
     }
 description: |-
   ## Purpose
@@ -36,11 +39,14 @@ description: |-
   - **Optional body fields:**
     - `expires_at` (ISO date string) - initial expiry date for the reseller's access. Defaults to +6 months from now if omitted or `null`.
     - `initialCredit` (number) - starting wallet balance (USD) for the new reseller. Must be a non-negative number if provided; defaults to `0`.
+    - `address` (string) - company billing address. Shown on invoice PDFs' "Billed To" block. No format validation, no length cap. Omit or send `null` to leave unset.
+    - `license_detail` (string, max 255 chars) - business/license registration info, shown on invoice PDFs as "License: ...". Omit or send `null` to leave unset.
+    - `phone` (string, max 20 chars) - company contact phone, shown on invoice PDFs. Omit or send `null` to leave unset.
   - No `role` field is accepted - it is always set to `reseller` server-side.
 
   ## Responses
-  - **201 Created** - reseller account created successfully.
-  - **400 Bad Request** - missing/invalid `email`, `password` fails the password policy (returned as `errors.password`), or `initialCredit` is not a non-negative number (returned as `errors.initialCredit`).
+  - **201 Created** - reseller account created successfully. Response includes `address`, `license_detail`, and `phone` (each `null` if not provided).
+  - **400 Bad Request** - missing/invalid `email`, `password` fails the password policy (returned as `errors.password`), `initialCredit` is not a non-negative number (returned as `errors.initialCredit`), or `license_detail`/`phone` exceed their max length (`errors.license_detail`/`errors.phone`).
   - **409 Conflict** - a reseller with the same `username` already exists.
   - **403 Forbidden** - caller is a reseller.
   - **401 Unauthorized** - missing or invalid auth token.
@@ -51,3 +57,5 @@ description: |-
   After the reseller row is created, the backend emails `username` and the **plaintext** password (captured before hashing) plus the `ADMIN_PANEL_URL` login link to `email`. If that email fails to send, reseller creation still succeeds (the DB write is not rolled back) - the failure is only logged server-side, not surfaced in the response. Sending a plaintext password by email is a known-imperfect pattern; a one-time setup-link flow is a possible future improvement.
 
   A wallet row is always created alongside the reseller, seeded from `initialCredit` (or `0`). If `initialCredit` is greater than `0`, a matching `initial_credit` entry is also logged in `wallet_ledger`. See `GET /api/resellers/:id/wallet`.
+
+  `address`/`license_detail`/`phone` are fetched fresh (not snapshotted) every time an invoice PDF is generated - editing them later (see Update Admin) changes what appears on *every* invoice for that reseller, including already-sent ones, if the PDF is ever regenerated or re-downloaded.

@@ -94,9 +94,16 @@ async function clearLoginLockout(id) {
   ]);
 }
 
+// Billing/company profile fields, shown on invoice PDFs' "Billed To" block
+// (see renderMeta in utils/pdfInvoice.js) - all optional/nullable, added as
+// additive columns on top of the original admins table (see
+// scripts/ensure-additive-columns.js), so legacy resellers simply have none
+// of them set until an admin fills them in.
+const RESELLER_COLUMNS =
+  "id, username, role, status, expires_at, expired_at, email, address, license_detail, phone, created_at";
+
 async function listResellers(status) {
-  let query =
-    "SELECT id, username, role, status, expires_at, expired_at, email, created_at FROM admins WHERE role = 'reseller'";
+  let query = `SELECT ${RESELLER_COLUMNS} FROM admins WHERE role = 'reseller'`;
   const params = [];
 
   if (status) {
@@ -120,18 +127,19 @@ async function listAdminsByRole(role) {
 
 async function getResellerById(id) {
   const [rows] = await adminPool.query(
-    "SELECT id, username, role, status, expires_at, expired_at, email, created_at FROM admins WHERE id = ? AND role = 'reseller' LIMIT 1",
+    `SELECT ${RESELLER_COLUMNS} FROM admins WHERE id = ? AND role = 'reseller' LIMIT 1`,
     [id]
   );
   return rows[0] || null;
 }
 
-async function createReseller({ username, passwordHash, expiresAt, email }) {
+async function createReseller({ username, passwordHash, expiresAt, email, address, licenseDetail, phone }) {
   // admins.id is UUID, not AUTO_INCREMENT - the app must generate it.
   const id = uuidv4();
   await adminPool.query(
-    "INSERT INTO admins (id, username, password_hash, role, status, expires_at, email) VALUES (?, ?, ?, 'reseller', 'active', ?, ?)",
-    [id, username, passwordHash, expiresAt, email]
+    `INSERT INTO admins (id, username, password_hash, role, status, expires_at, email, address, license_detail, phone)
+     VALUES (?, ?, ?, 'reseller', 'active', ?, ?, ?, ?, ?)`,
+    [id, username, passwordHash, expiresAt, email, address ?? null, licenseDetail ?? null, phone ?? null]
   );
   return getResellerById(id);
 }
@@ -180,6 +188,33 @@ async function updateResellerEmail(id, email) {
   return getResellerById(id);
 }
 
+async function updateResellerAddress(id, address) {
+  const [result] = await adminPool.query(
+    "UPDATE admins SET address = ? WHERE id = ? AND role = 'reseller'",
+    [address, id]
+  );
+  if (result.affectedRows === 0) return null;
+  return getResellerById(id);
+}
+
+async function updateResellerLicenseDetail(id, licenseDetail) {
+  const [result] = await adminPool.query(
+    "UPDATE admins SET license_detail = ? WHERE id = ? AND role = 'reseller'",
+    [licenseDetail, id]
+  );
+  if (result.affectedRows === 0) return null;
+  return getResellerById(id);
+}
+
+async function updateResellerPhone(id, phone) {
+  const [result] = await adminPool.query(
+    "UPDATE admins SET phone = ? WHERE id = ? AND role = 'reseller'",
+    [phone, id]
+  );
+  if (result.affectedRows === 0) return null;
+  return getResellerById(id);
+}
+
 async function updateResellerPassword(id, passwordHash) {
   const [result] = await adminPool.query(
     "UPDATE admins SET password_hash = ?, password_changed_at = NOW(), failed_login_attempts = 0, locked_until = NULL WHERE id = ? AND role = 'reseller'",
@@ -212,6 +247,9 @@ module.exports = {
   createReseller,
   updateResellerStatus,
   updateResellerEmail,
+  updateResellerAddress,
+  updateResellerLicenseDetail,
+  updateResellerPhone,
   updateResellerPassword,
   deleteReseller,
   renewReseller,

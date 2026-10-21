@@ -19,8 +19,16 @@ const ACCOUNTS_ADDITIVE_COLUMNS = {
 // older value is rejected even though it's otherwise still signature-valid
 // and unexpired. DEFAULT 0 so every pre-existing admin row starts at the
 // same value new logins are signed against.
+//
+// address/license_detail/phone are a reseller's billing/company profile,
+// shown on invoice PDFs' "Billed To" block (see renderMeta in
+// utils/pdfInvoice.js) - all DEFAULT NULL so every pre-existing reseller
+// simply has none of them set until an admin fills them in.
 const ADMINS_ADDITIVE_COLUMNS = {
   token_version: 'ALTER TABLE admins ADD COLUMN token_version int unsigned NOT NULL DEFAULT 0',
+  address: 'ALTER TABLE admins ADD COLUMN address text DEFAULT NULL',
+  license_detail: 'ALTER TABLE admins ADD COLUMN license_detail varchar(255) DEFAULT NULL',
+  phone: 'ALTER TABLE admins ADD COLUMN phone varchar(20) DEFAULT NULL',
 };
 
 async function ensureAdditiveColumns(pool, databaseName, tableName, additiveColumns) {

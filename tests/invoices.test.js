@@ -55,21 +55,47 @@ function wireMocks() {
     const row = resellersById[id];
     return row ? { ...row } : null;
   });
-  adminModel.createReseller.mockImplementation(async ({ username, passwordHash, expiresAt, email }) => {
-    const id = nextAdminId++;
-    const publicRow = {
-      id,
-      username,
-      role: 'reseller',
-      status: 'active',
-      expires_at: expiresAt,
-      expired_at: null,
-      email,
-      created_at: new Date(),
-    };
-    resellersById[id] = publicRow;
-    adminsByUsername[username] = { ...publicRow, password_hash: passwordHash };
-    return { ...publicRow };
+  adminModel.createReseller.mockImplementation(
+    async ({ username, passwordHash, expiresAt, email, address, licenseDetail, phone }) => {
+      const id = nextAdminId++;
+      const publicRow = {
+        id,
+        username,
+        role: 'reseller',
+        status: 'active',
+        expires_at: expiresAt,
+        expired_at: null,
+        email,
+        address: address ?? null,
+        license_detail: licenseDetail ?? null,
+        phone: phone ?? null,
+        created_at: new Date(),
+      };
+      resellersById[id] = publicRow;
+      adminsByUsername[username] = { ...publicRow, password_hash: passwordHash };
+      return { ...publicRow };
+    }
+  );
+
+  adminModel.updateResellerAddress.mockImplementation(async (id, address) => {
+    const row = resellersById[id];
+    if (!row) return null;
+    row.address = address;
+    return { ...row };
+  });
+
+  adminModel.updateResellerLicenseDetail.mockImplementation(async (id, licenseDetail) => {
+    const row = resellersById[id];
+    if (!row) return null;
+    row.license_detail = licenseDetail;
+    return { ...row };
+  });
+
+  adminModel.updateResellerPhone.mockImplementation(async (id, phone) => {
+    const row = resellersById[id];
+    if (!row) return null;
+    row.phone = phone;
+    return { ...row };
   });
 
   accountModel.findAccountLabelsByIds.mockImplementation(async (ids) =>
@@ -659,6 +685,31 @@ describe('Invoices (Phase 4, corrected)', () => {
       const res = await adminAgent.get(`/api/invoices/${invoice.id}/pdf`);
       expect(res.status).toBe(200);
       expect(countPdfPages(pdfBuffer(res))).toBe(1);
+    });
+
+    test('the "Billed To" block renders without error for a reseller with full company details, including a long address, and stays a single page', async () => {
+      const detailedReseller = await createReseller(adminAgent, {
+        username: `inv_send_detailed_${Date.now()}`,
+        password: resellerPassword,
+        email: `inv_send_detailed_${Date.now()}@example.com`,
+      });
+      const updateRes = await adminAgent.patch(`/api/admins/${detailedReseller.id}`).send({
+        address: '1234 Very Long Billing Address Lane, Suite 5678, Some City, Some State, 00000, Some Country',
+        license_detail: 'LIC-9876543210',
+        phone: '+15550001111',
+      });
+      expect(updateRes.status).toBe(200);
+
+      seedRenewalDeduction(detailedReseller.id, 7, 9, new Date(2026, 7, 5));
+      const createRes = await adminAgent
+        .post('/api/invoices')
+        .send({ resellerId: detailedReseller.id, periodType: 'monthly', periodValue: '2026-08' });
+      expect(createRes.status).toBe(201);
+
+      const pdfRes = await adminAgent.get(`/api/invoices/${createRes.body.id}/pdf`);
+      expect(pdfRes.status).toBe(200);
+      expect(pdfBuffer(pdfRes).slice(0, 4).toString()).toBe('%PDF');
+      expect(countPdfPages(pdfBuffer(pdfRes))).toBe(1);
     });
 
     test('the owning reseller cannot fetch the PDF before it has been sent', async () => {

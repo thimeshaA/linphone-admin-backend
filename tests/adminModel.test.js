@@ -18,7 +18,7 @@ describe('adminModel.createReseller', () => {
 
     adminPool.query.mockImplementation(async (sql, params) => {
       if (sql.startsWith('INSERT INTO admins')) {
-        const [id, username, passwordHash, expiresAt, email] = params;
+        const [id, username, passwordHash, expiresAt, email, address, licenseDetail, phone] = params;
         adminsById[id] = {
           id,
           username,
@@ -28,6 +28,9 @@ describe('adminModel.createReseller', () => {
           expires_at: expiresAt,
           expired_at: null,
           email,
+          address,
+          license_detail: licenseDetail,
+          phone,
           created_at: new Date(),
         };
         return [{ insertId: 0 }];
@@ -54,5 +57,30 @@ describe('adminModel.createReseller', () => {
     expect(reseller.id).toMatch(UUID_RE);
     expect(reseller.id).not.toBe(0);
     expect(reseller.username).toBe('acme_reseller');
+  });
+
+  test('passes address/licenseDetail/phone through to the insert, defaulting to null when omitted', async () => {
+    const withDetails = await createReseller({
+      username: 'acme_with_details',
+      passwordHash: 'hashed',
+      expiresAt: new Date('2027-01-01'),
+      email: 'acme-details@example.com',
+      address: '1 Acme Way',
+      licenseDetail: 'LIC-123',
+      phone: '+15551234567',
+    });
+    expect(withDetails.address).toBe('1 Acme Way');
+    expect(withDetails.license_detail).toBe('LIC-123');
+    expect(withDetails.phone).toBe('+15551234567');
+
+    const withoutDetails = await createReseller({
+      username: 'acme_without_details',
+      passwordHash: 'hashed',
+      expiresAt: new Date('2027-01-01'),
+      email: 'acme-nodetails@example.com',
+    });
+    expect(withoutDetails.address).toBeNull();
+    expect(withoutDetails.license_detail).toBeNull();
+    expect(withoutDetails.phone).toBeNull();
   });
 });
