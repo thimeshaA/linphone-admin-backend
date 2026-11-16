@@ -1,0 +1,36 @@
+# Backend API. Build the image on the server from the backend repo first:
+#   podman build -t localhost/admin-backend:CHANGE_ME_TAG -f Containerfile .
+# and set the same tag in Image= below.
+#
+# EnvironmentFile: created by hand on the server, never committed (variables
+# listed in .env.example). %h is the rootless user's home directory.
+# chmod 600 it. Environment= below overrides values from that file.
+
+[Unit]
+Description=Linphone admin panel backend
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=admin-backend
+Image=localhost/admin-backend:CHANGE_ME_TAG
+PublishPort=127.0.0.1:8083:4000
+Network=admin-panel.network
+EnvironmentFile=%h/.config/admin-panel/backend.env
+Environment=NODE_ENV=production
+DNS=8.8.8.8
+DNS=10.8.1.1
+# /health checks both DB pools, so this also catches a container that is up
+# but can't reach the database.
+HealthCmd=wget -q -O /dev/null http://127.0.0.1:4000/health
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=20s
+HealthOnFailure=restart
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

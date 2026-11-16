@@ -1,0 +1,36 @@
+# Frontend (Next.js). Build the image on the server from the frontend repo first;
+# NEXT_PUBLIC_SIP_DOMAIN is baked in at build time, so changing it needs a rebuild:
+#   podman build -t localhost/admin-frontend:CHANGE_ME_TAG \
+#     --build-arg NEXT_PUBLIC_SIP_DOMAIN=<sip-domain> -f Containerfile .
+# and set the same tag in Image= below.
+#
+# EnvironmentFile: created by hand on the server, never committed. %h is the
+# rootless user's home directory. BACKEND_URL is set below, not in that file.
+
+[Unit]
+Description=Linphone admin panel frontend
+Requires=admin-backend.service
+After=admin-backend.service
+
+[Container]
+ContainerName=admin-frontend
+Image=localhost/admin-frontend:CHANGE_ME_TAG
+PublishPort=127.0.0.1:8084:3000
+Network=admin-panel.network
+EnvironmentFile=%h/.config/admin-panel/frontend.env
+# Backend by container name on the shared network (container port, not 8083).
+Environment=BACKEND_URL=http://admin-backend:4000
+DNS=8.8.8.8
+DNS=10.8.1.1
+HealthCmd=wget -q -O /dev/null http://127.0.0.1:3000/
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=20s
+HealthOnFailure=restart
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

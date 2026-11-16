@@ -7,5 +7,5 @@ npm-debug.log
 .gitignore
 .DS_Store
 tests
-docker-compose*.yml
-Dockerfile
+deploy
+Containerfile

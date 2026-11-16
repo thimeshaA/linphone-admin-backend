@@ -1,0 +1,11 @@
+# Rootless Quadlet units for production. Install as the service user:
+#   cp deploy/quadlet/* ~/.config/containers/systemd/
+#   systemctl --user daemon-reload
+#   systemctl --user start admin-backend.service admin-frontend.service
+# Run `loginctl enable-linger <user>` once so the units start at boot without a login.
+#
+# Shared network for admin-backend and admin-frontend (podman network name:
+# systemd-admin-panel). The frontend reaches the backend as admin-backend:4000.
+
+[Network]
+Driver=bridge
