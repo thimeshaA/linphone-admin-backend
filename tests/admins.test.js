@@ -52,23 +52,28 @@ function wireMocks() {
     return row ? { ...row } : null;
   });
 
-  adminModel.createReseller.mockImplementation(async ({ username, passwordHash, expiresAt, email }) => {
-    const id = nextId++;
-    const publicRow = {
-      id,
-      username,
-      role: 'reseller',
-      status: 'active',
-      expires_at: expiresAt,
-      expired_at: null,
-      email,
-      created_at: new Date(),
-    };
-    resellersById[id] = publicRow;
-    adminsByUsername[username] = { ...publicRow, password_hash: passwordHash };
-    adminsByEmail[email] = adminsByUsername[username];
-    return { ...publicRow };
-  });
+  adminModel.createReseller.mockImplementation(
+    async ({ username, passwordHash, expiresAt, email, address, licenseDetail, phone }) => {
+      const id = nextId++;
+      const publicRow = {
+        id,
+        username,
+        role: 'reseller',
+        status: 'active',
+        expires_at: expiresAt,
+        expired_at: null,
+        email,
+        address: address ?? null,
+        license_detail: licenseDetail ?? null,
+        phone: phone ?? null,
+        created_at: new Date(),
+      };
+      resellersById[id] = publicRow;
+      adminsByUsername[username] = { ...publicRow, password_hash: passwordHash };
+      adminsByEmail[email] = adminsByUsername[username];
+      return { ...publicRow };
+    }
+  );
 
   adminModel.renewReseller.mockImplementation(async (id, expiresAt) => {
     const row = resellersById[id];
@@ -101,6 +106,27 @@ function wireMocks() {
     row.email = email;
     if (adminsByUsername[row.username]) adminsByUsername[row.username].email = email;
     adminsByEmail[email] = adminsByUsername[row.username];
+    return { ...row };
+  });
+
+  adminModel.updateResellerAddress.mockImplementation(async (id, address) => {
+    const row = resellersById[id];
+    if (!row) return null;
+    row.address = address;
+    return { ...row };
+  });
+
+  adminModel.updateResellerLicenseDetail.mockImplementation(async (id, licenseDetail) => {
+    const row = resellersById[id];
+    if (!row) return null;
+    row.license_detail = licenseDetail;
+    return { ...row };
+  });
+
+  adminModel.updateResellerPhone.mockImplementation(async (id, phone) => {
+    const row = resellersById[id];
+    if (!row) return null;
+    row.phone = phone;
     return { ...row };
   });
 
@@ -151,14 +177,23 @@ describe('Admins (reseller management) flow', () => {
   });
 
   test('2. create a reseller; role is forced to "reseller" even though "admin" was sent', async () => {
-    const res = await adminAgent
-      .post('/api/admins')
-      .send({ username: resellerUsername, password: resellerPassword, email: 'reseller@example.com', role: 'admin' });
+    const res = await adminAgent.post('/api/admins').send({
+      username: resellerUsername,
+      password: resellerPassword,
+      email: 'reseller@example.com',
+      role: 'admin',
+      address: '123 Billing St, Suite 4',
+      license_detail: 'LIC-00042',
+      phone: '+15551230000',
+    });
 
     expect(res.status).toBe(201);
     expect(res.body.username).toBe(resellerUsername);
     expect(res.body.role).toBe('reseller');
     expect(res.body).not.toHaveProperty('password_hash');
+    expect(res.body.address).toBe('123 Billing St, Suite 4');
+    expect(res.body.license_detail).toBe('LIC-00042');
+    expect(res.body.phone).toBe('+15551230000');
     expect(mailer.sendMail).toHaveBeenCalledTimes(1);
     expect(mailer.sendMail).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'reseller@example.com', subject: expect.stringContaining('reseller') })
@@ -166,6 +201,47 @@ describe('Admins (reseller management) flow', () => {
 
     resellerId = res.body.id;
     expect(resellerId).toBeDefined();
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'reseller_create', targetId: resellerId })
+    );
+  });
+
+  test('2b. creating a reseller with no company details at all leaves them null', async () => {
+    const res = await adminAgent.post('/api/admins').send({
+      username: `${resellerUsername}_nocompany`,
+      password: 'SomeOtherPass1!',
+      email: 'reseller-nocompany@example.com',
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.address).toBeNull();
+    expect(res.body.license_detail).toBeNull();
+    expect(res.body.phone).toBeNull();
+  });
+
+  test('2c. a phone longer than 20 characters is rejected with a field-specific 400', async () => {
+    const res = await adminAgent.post('/api/admins').send({
+      username: `${resellerUsername}_badphone`,
+      password: 'SomeOtherPass1!',
+      email: 'reseller-badphone@example.com',
+      phone: '1'.repeat(21),
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('phone');
+  });
+
+  test('2d. a license_detail longer than 255 characters is rejected with a field-specific 400', async () => {
+    const res = await adminAgent.post('/api/admins').send({
+      username: `${resellerUsername}_badlicense`,
+      password: 'SomeOtherPass1!',
+      email: 'reseller-badlicense@example.com',
+      license_detail: 'x'.repeat(256),
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('license_detail');
   });
 
   test('3. creating the same username again is rejected with 409', async () => {
@@ -226,6 +302,10 @@ describe('Admins (reseller management) flow', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('disabled');
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'reseller_update', targetId: String(resellerId) })
+    );
   });
 
   test('6b. attempting to change username via PATCH is rejected with a field-specific 400', async () => {
@@ -260,6 +340,43 @@ describe('Admins (reseller management) flow', () => {
     expect(res.body).toEqual({ error: 'Email already exists' });
 
     delete adminsByEmail[takenEmail];
+  });
+
+  test('6e. updating address, license_detail, and phone together in one request succeeds', async () => {
+    const res = await adminAgent.patch(`/api/admins/${resellerId}`).send({
+      address: '456 New Billing Ave',
+      license_detail: 'LIC-00099',
+      phone: '+15559998888',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.address).toBe('456 New Billing Ave');
+    expect(res.body.license_detail).toBe('LIC-00099');
+    expect(res.body.phone).toBe('+15559998888');
+
+    const getRes = await adminAgent.get(`/api/admins/${resellerId}`);
+    expect(getRes.body.address).toBe('456 New Billing Ave');
+    expect(getRes.body.license_detail).toBe('LIC-00099');
+    expect(getRes.body.phone).toBe('+15559998888');
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'reseller_update', targetId: String(resellerId) })
+    );
+  });
+
+  test('6f. explicitly clearing address with null succeeds', async () => {
+    const res = await adminAgent.patch(`/api/admins/${resellerId}`).send({ address: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.address).toBeNull();
+    expect(res.body.license_detail).toBe('LIC-00099'); // untouched by this request
+  });
+
+  test('6g. a PATCH with none of the recognized fields is rejected with 400', async () => {
+    const res = await adminAgent.patch(`/api/admins/${resellerId}`).send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'status, email, address, license_detail, or phone is required' });
   });
 
   test('7. login as that reseller fails with 403 while disabled', async () => {
@@ -321,6 +438,10 @@ describe('Admins (reseller management) flow', () => {
     expect(res.body.status).toBe('active');
     expect(res.body.expired_at).toBeNull();
     expect(new Date(res.body.expires_at).toISOString()).toBe(futureDate);
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'reseller_renew', targetId: String(resellerId) })
+    );
   });
 
   test('11. renew with no body defaults expires_at to ~6 months out', async () => {
@@ -376,6 +497,10 @@ describe('Admins (reseller management) flow', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: 'Reseller deleted successfully' });
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'reseller_delete', targetId: String(resellerId) })
+    );
   });
 
   test('18. the deleted reseller no longer appears', async () => {

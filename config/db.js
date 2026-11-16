@@ -24,6 +24,14 @@ const adminPool = mysql.createPool({
   // strings, which would silently break arithmetic like balance comparisons
   // and the owed-accounts calculation.
   decimalNumbers: true,
+  // ADMIN_DB_HOST is a real domain (test.kryptoline.com) now serving a
+  // trusted (Let's Encrypt) cert for MySQL connections, so this both
+  // encrypts the connection and, via verifyIdentity, confirms the
+  // certificate actually belongs to that host - not just that it's signed
+  // by a CA mysql2/Node trusts. rejectUnauthorized defaults to true
+  // (mysql2's own default, not set here), so an untrusted/self-signed cert
+  // is already rejected regardless.
+  ssl: { verifyIdentity: true },
 });
 
 module.exports = { flexisipPool, adminPool };

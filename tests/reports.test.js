@@ -4,6 +4,7 @@ const { TEST_ADMIN_PASSWORD, TEST_ADMIN, hashOf } = require('./helpers/fixtures'
 jest.mock('../models/reportsModel');
 jest.mock('../models/adminModel');
 jest.mock('../models/walletLedgerModel');
+jest.mock('../models/auditLogModel');
 jest.mock('../utils/mailer');
 
 const reportsModel = require('../models/reportsModel');
@@ -129,7 +130,6 @@ function accountRow(overrides) {
     created_at: new Date('2026-08-05T00:00:00Z'),
     expires_at: new Date('2027-02-01T00:00:00Z'),
     disabled_at: null,
-    expired_at: null,
     renewed_at: null,
     creator_id: TEST_RESELLER.id,
     ...overrides,

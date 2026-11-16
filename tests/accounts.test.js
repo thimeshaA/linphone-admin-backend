@@ -1,5 +1,6 @@
 const request = require('supertest');
 const { TEST_ADMIN_PASSWORD, TEST_ADMIN } = require('./helpers/fixtures');
+const { SIP_REALM } = require('../utils/sipRealm');
 
 jest.mock('../models/adminModel');
 jest.mock('../models/accountModel');
@@ -7,6 +8,7 @@ jest.mock('../models/walletModel');
 jest.mock('../models/walletLedgerModel');
 jest.mock('../models/settingsModel');
 jest.mock('../models/notificationModel');
+jest.mock('../models/auditLogModel');
 jest.mock('../utils/mailer');
 
 const adminModel = require('../models/adminModel');
@@ -15,6 +17,7 @@ const walletModel = require('../models/walletModel');
 const walletLedgerModel = require('../models/walletLedgerModel');
 const settingsModel = require('../models/settingsModel');
 const notificationModel = require('../models/notificationModel');
+const auditLogModel = require('../models/auditLogModel');
 const mailer = require('../utils/mailer');
 const app = require('../index');
 
@@ -170,27 +173,35 @@ function wireMocks() {
     return row;
   }
 
+  // status is never stored on the fake row - it's derived the same way the
+  // real accounts table's CASE expression derives it (disabled_at wins,
+  // otherwise compare expires_at to now), so these mocks match the model's
+  // actual computed-status contract instead of trusting a stored field.
+  function computeStatus(row) {
+    if (row.disabled_at) return 'disabled';
+    return new Date(row.expires_at) < new Date() ? 'expired' : 'active';
+  }
+
   accountModel.findAccountByAuthid.mockImplementation(async (authid) => {
     const row = Object.values(accountsById).find((r) => r.authid === authid);
     return row ? { id: row.id } : null;
   });
 
-  accountModel.createAccount.mockImplementation(async ({ authid, domain, status, expiresAt, creatorId, email }) => {
+  accountModel.createAccount.mockImplementation(async ({ authid, domain, phone, expiresAt, creatorId, email }) => {
     const id = nextAccountId++;
     const row = {
       id,
       authid,
       domain,
+      phone,
       created_at: new Date(),
-      status,
       expires_at: expiresAt,
       disabled_at: null,
-      expired_at: null,
       creator_id: creatorId,
       email,
     };
     accountsById[id] = row;
-    return { ...row };
+    return { ...row, status: computeStatus(row) };
   });
 
   accountModel.listAccounts.mockImplementation(async (scopeFilter, { status, search } = {}) => {
@@ -198,42 +209,45 @@ function wireMocks() {
     if (scopeFilter && scopeFilter.creator_id !== undefined) {
       rows = rows.filter((r) => r.creator_id === scopeFilter.creator_id);
     }
-    if (status) rows = rows.filter((r) => r.status === status);
+    let projected = rows.map((r) => ({ ...r, status: computeStatus(r) }));
+    if (status) projected = projected.filter((r) => r.status === status);
     if (search) {
-      rows = rows.filter((r) => r.authid.includes(search) || r.domain.includes(search));
+      projected = projected.filter((r) => r.authid.includes(search) || r.domain.includes(search));
     }
-    return rows.map((r) => ({ ...r }));
+    return projected;
   });
 
   accountModel.getAccountById.mockImplementation(async (id, scopeFilter) => {
     const row = scopedRow(Number(id), scopeFilter);
-    return row ? { ...row } : null;
+    return row ? { ...row, status: computeStatus(row) } : null;
   });
 
   accountModel.reassignAccountCreator.mockImplementation(async (id, resellerId) => {
     const row = accountsById[Number(id)];
     if (!row) return null;
     row.creator_id = resellerId;
-    return { ...row };
+    return { ...row, status: computeStatus(row) };
   });
 
   accountModel.renewAccount.mockImplementation(async (id, scopeFilter, expiresAt) => {
     const row = scopedRow(Number(id), scopeFilter);
     if (!row) return null;
     row.expires_at = expiresAt;
-    if (new Date(expiresAt) > new Date()) {
-      row.status = 'active';
-      row.expired_at = null;
-    }
-    return { ...row };
+    return { ...row, status: computeStatus(row) };
   });
 
   accountModel.disableAccount.mockImplementation(async (id, scopeFilter) => {
     const row = scopedRow(Number(id), scopeFilter);
     if (!row) return null;
     row.disabled_at = new Date();
-    row.status = 'disabled';
-    return { ...row };
+    return { ...row, status: computeStatus(row) };
+  });
+
+  accountModel.enableAccount.mockImplementation(async (id, scopeFilter) => {
+    const row = scopedRow(Number(id), scopeFilter);
+    if (!row) return null;
+    row.disabled_at = null;
+    return { ...row, status: computeStatus(row) };
   });
 
   accountModel.updateAccountPassword.mockImplementation(async (id, scopeFilter) => {
@@ -248,11 +262,15 @@ function wireMocks() {
   });
 }
 
-function monthsFromNowCloseTo(date, months, toleranceDays = 1) {
-  const expected = new Date();
-  expected.setMonth(expected.getMonth() + months);
-  const diffMs = Math.abs(new Date(date).getTime() - expected.getTime());
-  return diffMs < toleranceDays * 24 * 60 * 60 * 1000;
+// accounts.authid is a real varchar(20) column - a `${prefix}_${Date.now()}`
+// style id (the pattern used everywhere else in this codebase's tests) is
+// routinely 25+ characters and would fail validation outright. Base-36
+// timestamp + a per-process counter keeps every generated id well under the
+// limit while still being unique across this file's test run.
+let uniqueAuthidCounter = 0;
+function uniqueAuthid(prefix = 'a') {
+  uniqueAuthidCounter += 1;
+  return `${prefix}${Date.now().toString(36)}${uniqueAuthidCounter}`.slice(0, 20);
 }
 
 describe('Accounts flow (admin + reseller)', () => {
@@ -267,8 +285,8 @@ describe('Accounts flow (admin + reseller)', () => {
   let reseller2Id;
 
   let accountId;
-  const accountAuthid = `testuser_${Date.now()}`;
-  const accountDomain = 'test.example.com';
+  const accountAuthid = uniqueAuthid('t');
+  const accountDomain = SIP_REALM;
 
   let otherAccountId;
   let reassignAccountId;
@@ -314,6 +332,7 @@ describe('Accounts flow (admin + reseller)', () => {
       authid: accountAuthid,
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'enduser@example.com',
     });
@@ -322,6 +341,18 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body.creator_id).toBe(resellerId);
     accountId = res.body.id;
     expect(mailer.sendMail).toHaveBeenCalledTimes(3);
+
+    expect(typeof res.body.qrPayload).toBe('string');
+    expect(res.body.qrPayload).not.toContain('AccountPass123!');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['pragma']).toBe('no-cache');
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_create', targetId: accountId })
+    );
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_qr_issued', targetId: accountId })
+    );
   });
 
   test('3a. an email-shaped authid is rejected with a field-specific 400', async () => {
@@ -329,6 +360,7 @@ describe('Accounts flow (admin + reseller)', () => {
       authid: 'not an authid@example.com',
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'valid@example.com',
     });
@@ -340,9 +372,10 @@ describe('Accounts flow (admin + reseller)', () => {
 
   test('3a2. a malformed email is rejected with a field-specific 400', async () => {
     const res = await adminAgent.post('/api/accounts').send({
-      authid: `testuser_${Date.now()}_bad_email`,
+      authid: uniqueAuthid('t'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'not-an-email',
     });
@@ -352,11 +385,11 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body.errors).not.toHaveProperty('authid');
   });
 
-  test('3c. reusing the same authid on a different domain is rejected with 409', async () => {
+  test('3c. reusing the same authid (domain omitted, defaults to the realm) is rejected with 409', async () => {
     const res = await adminAgent.post('/api/accounts').send({
       authid: accountAuthid,
-      domain: 'a-completely-different-domain.example.com',
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'someoneelse@example.com',
     });
@@ -365,11 +398,29 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body).toEqual({ error: 'An account with this authid already exists' });
   });
 
+  test('3c2. a domain other than the SIP realm is rejected with 400 and creates nothing', async () => {
+    const createCallsBefore = accountModel.createAccount.mock.calls.length;
+
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('t'),
+      domain: 'a-completely-different-domain.example.com',
+      password: 'AccountPass123!',
+      phone: '+15551234567',
+      resellerId,
+      email: 'wrongdomain@example.com',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('domain');
+    expect(accountModel.createAccount.mock.calls.length).toBe(createCallsBefore);
+  });
+
   test('3d. resellerId referencing a non-reseller admin is rejected with 400', async () => {
     const res = await adminAgent.post('/api/accounts').send({
-      authid: `testuser_${Date.now()}_bad_owner`,
+      authid: uniqueAuthid('t'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId: TEST_ADMIN.id,
       email: 'someoneelse2@example.com',
     });
@@ -380,9 +431,10 @@ describe('Accounts flow (admin + reseller)', () => {
 
   test('3e. missing resellerId is rejected with 400', async () => {
     const res = await adminAgent.post('/api/accounts').send({
-      authid: `testuser_${Date.now()}_no_owner`,
+      authid: uniqueAuthid('t'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       email: 'someoneelse3@example.com',
     });
 
@@ -392,9 +444,10 @@ describe('Accounts flow (admin + reseller)', () => {
 
   test('3b. as admin: create a second throwaway account owned by the second reseller', async () => {
     const res = await adminAgent.post('/api/accounts').send({
-      authid: `otheruser_${Date.now()}`,
+      authid: uniqueAuthid('o'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId: reseller2Id,
       email: 'otherenduser@example.com',
     });
@@ -407,9 +460,10 @@ describe('Accounts flow (admin + reseller)', () => {
 
   test('3f. as admin: create a third throwaway account, owned by the first reseller, for reassignment tests', async () => {
     const res = await adminAgent.post('/api/accounts').send({
-      authid: `reassignuser_${Date.now()}`,
+      authid: uniqueAuthid('r'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'reassignenduser@example.com',
     });
@@ -420,38 +474,119 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(mailer.sendMail).toHaveBeenCalledTimes(5);
   });
 
-  test('4. as admin: list accounts, confirm created_by is present and correct', async () => {
+  test('3g. missing phone is rejected with a field-specific 400', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('t'),
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      resellerId,
+      email: 'nophone@example.com',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('phone');
+  });
+
+  test('3h. an authid over 20 characters is rejected with a field-specific 400', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: 'a'.repeat(21),
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      phone: '+15551234567',
+      resellerId,
+      email: 'toolong@example.com',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('authid');
+    expect(res.body.errors.authid).toContain('1-20 characters');
+  });
+
+  test('3i. an authid of exactly 20 characters is accepted (the real column is varchar(20))', async () => {
+    const authid = 'a'.repeat(20);
+    const res = await adminAgent.post('/api/accounts').send({
+      authid,
+      domain: accountDomain,
+      password: 'AccountPass123!',
+      phone: '+15551234567',
+      resellerId,
+      email: 'exact20@example.com',
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.authid).toBe(authid);
+
+    // Cleanup only - later tests assert an exact count of accounts owned by
+    // this reseller, and this one exists purely to prove the boundary case.
+    await adminAgent.delete(`/api/accounts/${res.body.id}`);
+  });
+
+  test('4. as admin: list accounts, confirm created_by is present and correct, no qrPayload', async () => {
     const res = await adminAgent.get('/api/accounts');
 
     expect(res.status).toBe(200);
     const created = res.body.find((a) => a.id === accountId);
     expect(created).toBeDefined();
     expect(created.created_by).toBe(resellerUsername);
+    expect(created).not.toHaveProperty('qrPayload');
   });
 
-  test('5. as admin: get account by id', async () => {
+  test('5. as admin: get account by id, no qrPayload', async () => {
     const res = await adminAgent.get(`/api/accounts/${accountId}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ id: accountId, authid: accountAuthid, domain: accountDomain });
+    expect(res.body).not.toHaveProperty('qrPayload');
   });
 
-  test('6. as admin: renew with a custom future date resets status to active and clears expired_at', async () => {
-    const futureDate = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+  test('6. as admin: renew with a custom future date resets computed status to active', async () => {
+    // Past the account's default ~6-month expiry, so this is a real extension.
+    const futureDate = new Date(Date.now() + 270 * 24 * 60 * 60 * 1000).toISOString();
 
     const res = await adminAgent.patch(`/api/accounts/${accountId}/renew`).send({ expires_at: futureDate });
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('active');
-    expect(res.body.expired_at).toBeNull();
     expect(new Date(res.body.expires_at).toISOString()).toBe(futureDate);
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_renew', targetId: String(accountId) })
+    );
   });
 
-  test('7. as admin: renew with no body defaults expires_at to ~6 months out', async () => {
+  test('7. as admin: renew with no body extends 6 months from the current (not-yet-lapsed) expiry', async () => {
+    // Extends from the remaining expiry rather than from today, so no paid
+    // time is discarded.
+    const before = await adminAgent.get(`/api/accounts/${accountId}`);
+    const expected = new Date(before.body.expires_at);
+    expected.setMonth(expected.getMonth() + 6);
+
     const res = await adminAgent.patch(`/api/accounts/${accountId}/renew`).send({});
 
     expect(res.status).toBe(200);
-    expect(monthsFromNowCloseTo(res.body.expires_at, 6)).toBe(true);
+    expect(new Date(res.body.expires_at).toISOString().slice(0, 10)).toBe(expected.toISOString().slice(0, 10));
+  });
+
+  test('7b. as admin: renew to a date that is not later than the current expiry is rejected', async () => {
+    const before = await adminAgent.get(`/api/accounts/${accountId}`);
+
+    const sameRes = await adminAgent
+      .patch(`/api/accounts/${accountId}/renew`)
+      .send({ expires_at: before.body.expires_at });
+    expect(sameRes.status).toBe(400);
+
+    const earlier = new Date(before.body.expires_at);
+    earlier.setMonth(earlier.getMonth() - 1);
+    const earlierRes = await adminAgent
+      .patch(`/api/accounts/${accountId}/renew`)
+      .send({ expires_at: earlier.toISOString() });
+    expect(earlierRes.status).toBe(400);
+
+    const invalidRes = await adminAgent.patch(`/api/accounts/${accountId}/renew`).send({ expires_at: 'not-a-date' });
+    expect(invalidRes.status).toBe(400);
+
+    const after = await adminAgent.get(`/api/accounts/${accountId}`);
+    expect(after.body.expires_at).toEqual(before.body.expires_at);
   });
 
   test('8. as admin: disable sets disabled_at and status, leaves expires_at untouched', async () => {
@@ -464,14 +599,29 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body.disabled_at).not.toBeNull();
     expect(res.body.status).toBe('disabled');
     expect(res.body.expires_at).toBe(expiresAtBefore);
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_disable', targetId: String(accountId) })
+    );
   });
 
-  test('9. as admin: update password succeeds with no password in the response', async () => {
+  test('9. as admin: update password succeeds with no plaintext password in the response, but a qrPayload', async () => {
     const res = await adminAgent.patch(`/api/accounts/${accountId}/password`).send({ password: 'NewAcctPass456!' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ message: 'Password updated successfully' });
+    expect(res.body.message).toBe('Password updated successfully');
     expect(res.body).not.toHaveProperty('password');
+    expect(typeof res.body.qrPayload).toBe('string');
+    expect(res.body.qrPayload).not.toContain('NewAcctPass456!');
+    expect(res.headers['cache-control']).toBe('no-store');
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: TEST_ADMIN.id,
+        action: 'account_password_update',
+        targetId: String(accountId),
+      })
+    );
   });
 
   test('9b. as admin: reassign an account to a different reseller updates creator_id', async () => {
@@ -481,6 +631,14 @@ describe('Accounts flow (admin + reseller)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.creator_id).toBe(reseller2Id);
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: TEST_ADMIN.id,
+        action: 'account_reassign',
+        targetId: String(reassignAccountId),
+      })
+    );
   });
 
   test('9c. as admin: reassign with a resellerId that is not a reseller is rejected with 400', async () => {
@@ -528,7 +686,25 @@ describe('Accounts flow (admin + reseller)', () => {
     expect(res.body.id).toBe(accountId);
   });
 
-  test('13. as reseller: get/renew/disable an account they do not own each return 404', async () => {
+  test('12b. as reseller: updating the password of the account they own succeeds, with a qrPayload', async () => {
+    const res = await resellerAgent.patch(`/api/accounts/${accountId}/password`).send({ password: 'ResellerSetPass789!' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe('Password updated successfully');
+    expect(typeof res.body.qrPayload).toBe('string');
+    expect(res.body.qrPayload).not.toContain('ResellerSetPass789!');
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: resellerId,
+        actorRole: 'reseller',
+        action: 'account_password_update',
+        targetId: String(accountId),
+      })
+    );
+  });
+
+  test('13. as reseller: get/renew/disable/change-password of an account they do not own each return 404', async () => {
     const getRes = await resellerAgent.get(`/api/accounts/${otherAccountId}`);
     expect(getRes.status).toBe(404);
 
@@ -537,13 +713,23 @@ describe('Accounts flow (admin + reseller)', () => {
 
     const disableRes = await resellerAgent.patch(`/api/accounts/${otherAccountId}/disable`);
     expect(disableRes.status).toBe(404);
+
+    const enableRes = await resellerAgent.patch(`/api/accounts/${otherAccountId}/enable`);
+    expect(enableRes.status).toBe(404);
+
+    const passwordRes = await resellerAgent
+      .patch(`/api/accounts/${otherAccountId}/password`)
+      .send({ password: 'ShouldNotWork123!' });
+    expect(passwordRes.status).toBe(404);
+    expect(passwordRes.body).not.toHaveProperty('qrPayload');
   });
 
   test('13b. as reseller: creating an account directly is forbidden', async () => {
     const res = await resellerAgent.post('/api/accounts').send({
-      authid: `resellerattempt_${Date.now()}`,
+      authid: uniqueAuthid('ra'),
       domain: accountDomain,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: 'resellerattempt@example.com',
     });
@@ -572,6 +758,9 @@ describe('Accounts flow (admin + reseller)', () => {
     const del1 = await adminAgent.delete(`/api/accounts/${accountId}`);
     expect(del1.status).toBe(200);
     expect(del1.body).toEqual({ message: 'Account deleted successfully' });
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: TEST_ADMIN.id, action: 'account_delete', targetId: String(accountId) })
+    );
 
     const del2 = await adminAgent.delete(`/api/accounts/${otherAccountId}`);
     expect(del2.status).toBe(200);
@@ -601,8 +790,9 @@ describe('Renewal wallet deduction (Phase 2)', () => {
   async function createAccount({ authid, resellerId }) {
     const res = await adminAgent.post('/api/accounts').send({
       authid,
-      domain: 'test.example.com',
+      domain: SIP_REALM,
       password: 'AccountPass123!',
+      phone: '+15551234567',
       resellerId,
       email: `${authid}@example.com`,
     });
@@ -624,7 +814,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
       email: `deduct_reseller_${Date.now()}@example.com`,
       initialCredit: 10,
     });
-    account = await createAccount({ authid: `deduct_account_${Date.now()}`, resellerId: reseller.id });
+    account = await createAccount({ authid: uniqueAuthid('d'), resellerId: reseller.id });
 
     mailer.sendMail.mockClear();
   });
@@ -682,13 +872,12 @@ describe('Renewal wallet deduction (Phase 2)', () => {
     const unassignedId = 555555;
     accountsById[unassignedId] = {
       id: unassignedId,
-      authid: `unassigned_${Date.now()}`,
-      domain: 'test.example.com',
+      authid: uniqueAuthid('u'),
+      domain: SIP_REALM,
+      phone: '+15550000000',
       created_at: new Date(),
-      status: 'active',
-      expires_at: new Date(),
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
       disabled_at: null,
-      expired_at: null,
       creator_id: null,
       email: 'unassigned@example.com',
     };
@@ -717,7 +906,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
     delete walletsByResellerId[noWalletReseller.id];
 
     const noWalletAccount = await createAccount({
-      authid: `deduct_nowallet_account_${Date.now()}`,
+      authid: uniqueAuthid('n'),
       resellerId: noWalletReseller.id,
     });
 
@@ -793,13 +982,14 @@ describe('Renewal wallet deduction (Phase 2)', () => {
       email: `deduct_deepdebt_${Date.now()}@example.com`,
     });
     const deepDebtAccount = await createAccount({
-      authid: `deduct_deepdebt_account_${Date.now()}`,
+      authid: uniqueAuthid('dd'),
       resellerId: deepDebtReseller.id,
     });
     walletsByResellerId[deepDebtReseller.id].balance_usd = -100000;
     const balanceBefore = walletsByResellerId[deepDebtReseller.id].balance_usd;
 
-    const newExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    // Past the account's default ~6-month expiry, so this is a real extension.
+    const newExpiresAt = new Date(Date.now() + 300 * 24 * 60 * 60 * 1000).toISOString();
     const res = await adminAgent
       .patch(`/api/accounts/${deepDebtAccount.id}/renew`)
       .send({ expires_at: newExpiresAt });
@@ -819,7 +1009,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
       email: `deduct_negfmt_${Date.now()}@example.com`,
     });
     const negBalanceAccount = await createAccount({
-      authid: `deduct_negfmt_account_${Date.now()}`,
+      authid: uniqueAuthid('nf'),
       resellerId: negBalanceReseller.id,
     });
     walletsByResellerId[negBalanceReseller.id].balance_usd = -8; // 8 + 15 = 23, cleanly negative after this renewal
@@ -873,7 +1063,7 @@ describe('Renewal wallet deduction (Phase 2)', () => {
         initialCredit: 1000,
       });
       propAccount = await createAccount({
-        authid: `deduct_period_account_${Date.now()}`,
+        authid: uniqueAuthid('p'),
         resellerId: propReseller.id,
       });
 
@@ -926,5 +1116,294 @@ describe('Renewal wallet deduction (Phase 2)', () => {
 
       expect(walletsByResellerId[propReseller.id].balance_usd).toBe(balanceBefore - 30);
     });
+  });
+
+  describe('re-enabling a disabled account', () => {
+    let enableAccount;
+
+    beforeAll(async () => {
+      enableAccount = await createAccount({ authid: uniqueAuthid('e'), resellerId: reseller.id });
+      const disableRes = await adminAgent.patch(`/api/accounts/${enableAccount.id}/disable`);
+      expect(disableRes.status).toBe(200);
+      expect(disableRes.body.status).toBe('disabled');
+    });
+
+    test('clears disabled_at, keeps the expiry, and never touches the wallet or ledger', async () => {
+      const balanceBefore = walletsByResellerId[reseller.id].balance_usd;
+      const ledgerCountBefore = ledgerEntries.length;
+      auditLogModel.createAuditLog.mockClear();
+
+      const res = await adminAgent.patch(`/api/accounts/${enableAccount.id}/enable`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.disabled_at).toBeNull();
+      expect(res.body.status).toBe('active');
+      expect(res.body.expires_at).toEqual(enableAccount.expires_at);
+
+      expect(walletsByResellerId[reseller.id].balance_usd).toBe(balanceBefore);
+      expect(ledgerEntries.length).toBe(ledgerCountBefore);
+      expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'account_enable', targetId: String(enableAccount.id) })
+      );
+      expect(auditLogModel.createAuditLog).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'account_renew' })
+      );
+    });
+
+    test('returns 404 for an account that does not exist', async () => {
+      const res = await adminAgent.patch('/api/accounts/999999/enable');
+      expect(res.status).toBe(404);
+    });
+  });
+});
+
+describe('QR payload issuance', () => {
+  const adminAgent = request.agent(app);
+  let qrReseller1;
+  let qrReseller2;
+  let qrAccount1;
+  let originalQrKey;
+  const resellerPassword = 'ResellerPass123!';
+
+  beforeAll(async () => {
+    originalQrKey = process.env.QR_ENCRYPTION_KEY;
+
+    const loginRes = await adminAgent
+      .post('/api/auth/login')
+      .send({ username: TEST_ADMIN.username, password: TEST_ADMIN_PASSWORD });
+    expect(loginRes.status).toBe(200);
+
+    const r1 = await adminAgent
+      .post('/api/admins')
+      .send({ username: `qr_r1_${Date.now()}`, password: resellerPassword, email: `qr_r1_${Date.now()}@example.com` });
+    expect(r1.status).toBe(201);
+    qrReseller1 = r1.body;
+
+    const r2 = await adminAgent
+      .post('/api/admins')
+      .send({ username: `qr_r2_${Date.now()}`, password: resellerPassword, email: `qr_r2_${Date.now()}@example.com` });
+    expect(r2.status).toBe(201);
+    qrReseller2 = r2.body;
+
+    const acc1 = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('qr'),
+      domain: SIP_REALM,
+      password: 'AccountPass123!',
+      phone: '+15551230000',
+      resellerId: qrReseller1.id,
+      email: 'qr1@example.com',
+    });
+    expect(acc1.status).toBe(201);
+    qrAccount1 = acc1.body;
+  });
+
+  afterEach(() => {
+    process.env.QR_ENCRYPTION_KEY = originalQrKey;
+  });
+
+  test('a missing QR_ENCRYPTION_KEY rejects account creation with 500 before any DB write', async () => {
+    delete process.env.QR_ENCRYPTION_KEY;
+    const createCallsBefore = accountModel.createAccount.mock.calls.length;
+
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('qrfail'),
+      domain: SIP_REALM,
+      password: 'AccountPass123!',
+      phone: '+15551230001',
+      resellerId: qrReseller1.id,
+      email: 'qrfail@example.com',
+    });
+
+    expect(res.status).toBe(500);
+    expect(accountModel.createAccount.mock.calls.length).toBe(createCallsBefore);
+  });
+
+  test('an invalid (non-base64) QR_ENCRYPTION_KEY rejects a password change with 500 before any DB write', async () => {
+    process.env.QR_ENCRYPTION_KEY = 'not-valid-base64!!';
+    const updateCallsBefore = accountModel.updateAccountPassword.mock.calls.length;
+
+    const res = await adminAgent
+      .patch(`/api/accounts/${qrAccount1.id}/password`)
+      .send({ password: 'AnotherPass456!' });
+
+    expect(res.status).toBe(500);
+    expect(accountModel.updateAccountPassword.mock.calls.length).toBe(updateCallsBefore);
+  });
+
+  test('a successful password change returns a qrPayload, logs account_qr_issued, and never logs the password or payload', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const newPassword = 'Brand-New-Pass-789!';
+    const res = await adminAgent.patch(`/api/accounts/${qrAccount1.id}/password`).send({ password: newPassword });
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.qrPayload).toBe('string');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['pragma']).toBe('no-cache');
+
+    expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'account_qr_issued', targetId: String(qrAccount1.id) })
+    );
+
+    const auditCallsText = JSON.stringify(auditLogModel.createAuditLog.mock.calls);
+    expect(auditCallsText).not.toContain(newPassword);
+    expect(auditCallsText).not.toContain(res.body.qrPayload);
+
+    const loggedText = JSON.stringify([...errorSpy.mock.calls, ...logSpy.mock.calls, ...warnSpy.mock.calls]);
+    expect(loggedText).not.toContain(newPassword);
+    expect(loggedText).not.toContain(res.body.qrPayload);
+
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  test("a reseller cannot obtain a QR payload for another reseller's account via password change", async () => {
+    const reseller1Agent = request.agent(app);
+    const loginRes = await reseller1Agent
+      .post('/api/auth/login')
+      .send({ username: qrReseller1.username, password: resellerPassword });
+    expect(loginRes.status).toBe(200);
+
+    const acc2 = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('qr2'),
+      domain: SIP_REALM,
+      password: 'AccountPass123!',
+      phone: '+15551230002',
+      resellerId: qrReseller2.id,
+      email: 'qr2@example.com',
+    });
+    expect(acc2.status).toBe(201);
+
+    const updateCallsBefore = accountModel.updateAccountPassword.mock.calls.length;
+    const res = await reseller1Agent
+      .patch(`/api/accounts/${acc2.body.id}/password`)
+      .send({ password: 'ShouldNotWork123!' });
+
+    expect(res.status).toBe(404);
+    expect(res.body).not.toHaveProperty('qrPayload');
+    expect(accountModel.updateAccountPassword.mock.calls.length).toBe(updateCallsBefore);
+  });
+
+  test('a reseller still cannot create accounts directly', async () => {
+    const reseller1Agent = request.agent(app);
+    const loginRes = await reseller1Agent
+      .post('/api/auth/login')
+      .send({ username: qrReseller1.username, password: resellerPassword });
+    expect(loginRes.status).toBe(200);
+
+    const res = await reseller1Agent.post('/api/accounts').send({
+      authid: uniqueAuthid('qrres'),
+      domain: SIP_REALM,
+      password: 'AccountPass123!',
+      phone: '+15551230003',
+      resellerId: qrReseller1.id,
+      email: 'qrres@example.com',
+    });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('SIP password hashing (SHA-256, matches production exactly)', () => {
+  const adminAgent = request.agent(app);
+  let hashReseller;
+  let vector1AccountId;
+
+  beforeAll(async () => {
+    const loginRes = await adminAgent
+      .post('/api/auth/login')
+      .send({ username: TEST_ADMIN.username, password: TEST_ADMIN_PASSWORD });
+    expect(loginRes.status).toBe(200);
+
+    const r = await adminAgent.post('/api/admins').send({
+      username: `hash_r_${Date.now()}`,
+      password: 'ResellerPass123!',
+      email: `hash_r_${Date.now()}@example.com`,
+    });
+    expect(r.status).toBe(201);
+    hashReseller = r.body;
+  });
+
+  test('vector 1: account creation reproduces the published SHA-256 hash exactly', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: 'testuser01',
+      password: 'testpass123',
+      phone: '+15551112222',
+      resellerId: hashReseller.id,
+      email: 'vector1@example.com',
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.domain).toBe(SIP_REALM);
+    vector1AccountId = res.body.id;
+
+    const createCall = accountModel.createAccount.mock.calls.find((call) => call[0].authid === 'testuser01');
+    expect(createCall[0].passwordHash).toBe('a71cd6d4175fd3fa6e9b0e232766222b3abc09f5a6c6a794752d2fc820eec866');
+  });
+
+  test('vector 2 (non-ASCII, UTF-8): a password change on the same account reproduces the published hash exactly', async () => {
+    const res = await adminAgent
+      .patch(`/api/accounts/${vector1AccountId}/password`)
+      .send({ password: 'Tëst-Päss✓' });
+
+    expect(res.status).toBe(200);
+
+    const matchingCalls = accountModel.updateAccountPassword.mock.calls.filter(
+      (call) => String(call[0]) === String(vector1AccountId)
+    );
+    const lastCall = matchingCalls[matchingCalls.length - 1];
+    expect(lastCall[2]).toBe('86fc2dc72334a33bd838f932b4a6570861ddb2562b65dd9d9dea3067c2fc41c0');
+  });
+
+  test('vector 3: a 20-character authid (the real column limit) reproduces the published hash exactly', async () => {
+    const res = await adminAgent.post('/api/accounts').send({
+      authid: 'longusername_20chars',
+      password: 'A1b2-C3d4!',
+      phone: '+15553334444',
+      resellerId: hashReseller.id,
+      email: 'vector3@example.com',
+    });
+
+    expect(res.status).toBe(201);
+
+    const createCall = accountModel.createAccount.mock.calls.find(
+      (call) => call[0].authid === 'longusername_20chars'
+    );
+    expect(createCall[0].passwordHash).toBe('1cc3e45187ca7d14b271cbc320bf25c008de995925c891651f6d788c4d70afdc');
+  });
+
+  test('nothing logs the plaintext password or the hashed string during creation or password change', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const plaintext = 'LogCheckPass999!';
+    const createRes = await adminAgent.post('/api/accounts').send({
+      authid: uniqueAuthid('logchk'),
+      password: plaintext,
+      phone: '+15559998888',
+      resellerId: hashReseller.id,
+      email: 'logcheck@example.com',
+    });
+    expect(createRes.status).toBe(201);
+
+    const changeRes = await adminAgent
+      .patch(`/api/accounts/${createRes.body.id}/password`)
+      .send({ password: 'LogCheckPass999New!' });
+    expect(changeRes.status).toBe(200);
+
+    const loggedText = JSON.stringify([...errorSpy.mock.calls, ...logSpy.mock.calls, ...warnSpy.mock.calls]);
+    expect(loggedText).not.toContain(plaintext);
+    expect(loggedText).not.toContain('LogCheckPass999New!');
+    expect(loggedText).not.toContain(
+      JSON.stringify({ v: 1, username: createRes.body.authid, password: plaintext }).slice(1, -1)
+    );
+
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });

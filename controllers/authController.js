@@ -6,6 +6,7 @@ const {
   findAdminByEmail,
   findAdminById,
   updatePasswordById,
+  incrementTokenVersion,
   markResellerExpired,
   recordFailedLogin,
   clearLoginLockout,
@@ -110,7 +111,13 @@ async function login(req, res) {
 
   const passwordChangedAtMs = admin.password_changed_at ? new Date(admin.password_changed_at).getTime() : 0;
   const token = jwt.sign(
-    { id: admin.id, username: admin.username, role: admin.role, pwc: passwordChangedAtMs },
+    {
+      id: admin.id,
+      username: admin.username,
+      role: admin.role,
+      pwc: passwordChangedAtMs,
+      tv: admin.token_version || 0,
+    },
     process.env.JWT_SECRET,
     { expiresIn: '1h', algorithm: 'HS256' }
   );
@@ -126,7 +133,11 @@ async function login(req, res) {
   });
 }
 
-function logout(req, res) {
+// Requires verifyToken (see routes/auth.js) so req.admin.id is a signature-
+// verified identity, not a client-supplied value - otherwise anyone could
+// bump an arbitrary admin's token_version and force-revoke their sessions.
+async function logout(req, res) {
+  await incrementTokenVersion(req.admin.id);
   res.clearCookie(COOKIE_NAME, cookieOptions);
   return res.json({ message: 'Logged out successfully' });
 }

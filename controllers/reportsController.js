@@ -80,7 +80,6 @@ const ACCOUNT_DETAIL_COLUMNS = [
   { key: 'created_at', label: 'Created', width: 64, align: 'left' },
   { key: 'expires_at', label: 'Expires', width: 64, align: 'left' },
   { key: 'disabled_at', label: 'Disabled', width: 64, align: 'left' },
-  { key: 'expired_at', label: 'Expired', width: 64, align: 'left' },
   { key: 'renewed_at', label: 'Renewed', width: 64, align: 'left' },
 ];
 const CREATED_BY_COLUMN = { key: 'created_by', label: 'Created By', flex: 1.5, align: 'left' };
@@ -95,7 +94,6 @@ function buildAccountRow(a, now) {
     created_at: formatDate(a.created_at),
     expires_at: formatDate(a.expires_at),
     disabled_at: formatDate(a.disabled_at),
-    expired_at: formatDate(a.expired_at),
     renewed_at: formatDate(a.renewed_at),
   };
 }

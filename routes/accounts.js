@@ -6,6 +6,7 @@ const {
   reassign,
   renew,
   disable,
+  enable,
   updatePassword,
   remove,
   requestAccounts,
@@ -23,6 +24,7 @@ router.post('/', verifyToken, requireAdmin, create);
 router.patch('/:id/reassign', verifyToken, requireAdmin, reassign);
 router.patch('/:id/renew', verifyToken, applyOwnershipFilter, renew);
 router.patch('/:id/disable', verifyToken, applyOwnershipFilter, disable);
+router.patch('/:id/enable', verifyToken, applyOwnershipFilter, enable);
 router.patch('/:id/password', verifyToken, applyOwnershipFilter, updatePassword);
 router.delete('/:id', verifyToken, requireAdmin, remove);
 

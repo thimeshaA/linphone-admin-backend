@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { getPasswordChangedAt } = require('../models/adminModel');
+const { getSessionInvalidationState } = require('../models/adminModel');
 
 async function verifyToken(req, res, next) {
   const token = req.cookies?.token;
@@ -16,12 +16,20 @@ async function verifyToken(req, res, next) {
 
     // JWTs are otherwise stateless, so without this a stolen cookie would
     // keep working for the rest of its 1h lifetime even after the real owner
-    // changes their password. `pwc` is the password_changed_at timestamp (ms)
-    // this token was issued against; if the account's password has changed
-    // since, the token predates that change and is rejected.
-    const currentChangedAt = await getPasswordChangedAt(payload.id);
-    const currentChangedAtMs = currentChangedAt ? new Date(currentChangedAt).getTime() : 0;
+    // changes their password or logs out. `pwc` is the password_changed_at
+    // timestamp (ms) this token was issued against; if the account's
+    // password has changed since, the token predates that change. `tv` is
+    // the token_version this token was issued against; logout (see
+    // authController.logout) bumps token_version, so any token issued before
+    // that point - including one copied before the logout request - fails
+    // this check immediately, instead of staying valid for the rest of its
+    // lifetime.
+    const state = (await getSessionInvalidationState(payload.id)) || {};
+    const currentChangedAtMs = state.password_changed_at ? new Date(state.password_changed_at).getTime() : 0;
     if (currentChangedAtMs > (payload.pwc || 0)) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+    if ((state.token_version || 0) !== (payload.tv || 0)) {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 

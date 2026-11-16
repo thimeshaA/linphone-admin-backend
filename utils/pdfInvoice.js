@@ -80,9 +80,25 @@ function renderHeader(doc, { invoice }) {
   return dividerY + 22;
 }
 
+// Company/billing detail lines shown under the reseller's name, in order,
+// skipping anything not set - a reseller created before address/license_detail
+// /phone existed (or one an admin just hasn't filled in) simply shows fewer
+// lines rather than blank gaps. `license_detail` is prefixed so it reads as
+// a label rather than an unexplained string.
+function billedToDetailLines(reseller) {
+  if (!reseller) return [];
+  const lines = [];
+  if (reseller.email) lines.push(reseller.email);
+  if (reseller.phone) lines.push(reseller.phone);
+  if (reseller.address) lines.push(reseller.address);
+  if (reseller.license_detail) lines.push(`License: ${reseller.license_detail}`);
+  return lines;
+}
+
 function renderMeta(doc, { reseller, invoice, periodLabel, startY }) {
   const { left, width } = contentBounds(doc);
   const colWidth = width / 2;
+  const DETAIL_LINE_HEIGHT = 13;
 
   doc
     .font('Helvetica-Bold')
@@ -96,15 +112,19 @@ function renderMeta(doc, { reseller, invoice, periodLabel, startY }) {
     .fontSize(12)
     .fillColor(INK)
     .text(reseller ? reseller.username : `Reseller #${invoice.reseller_id}`, left, startY + 13, { lineBreak: false });
-  if (reseller && reseller.email) {
+
+  const detailLines = billedToDetailLines(reseller);
+  let lastDetailY = startY + 13;
+  detailLines.forEach((line, i) => {
+    lastDetailY = startY + 29 + i * DETAIL_LINE_HEIGHT;
     doc
       .font('Helvetica')
       .fontSize(9)
       .fillColor(INK)
       .fillOpacity(0.6)
-      .text(reseller.email, left, startY + 29, { lineBreak: false });
-    doc.fillOpacity(1);
-  }
+      .text(line, left, lastDetailY, { width: colWidth - 10, ellipsis: true, lineBreak: false });
+  });
+  doc.fillOpacity(1);
 
   const detailX = left + colWidth;
   const labelWidth = colWidth * 0.45;
@@ -132,7 +152,16 @@ function renderMeta(doc, { reseller, invoice, periodLabel, startY }) {
   });
 
   doc.fillColor(INK);
-  return startY + 60;
+
+  // The right column (Invoice #/Period/Issue date/Status) is always exactly
+  // 4 fixed rows, so startY + 60 is its unchanged original bottom padding.
+  // The left column now grows with however many detail lines actually
+  // rendered, so the taller of the two decides where the table starts -
+  // with 0-1 detail lines (the original email-only case) this always
+  // resolves to the same startY + 60 as before.
+  const leftColumnBottom = lastDetailY + 15;
+  const rightColumnBottom = startY + 60;
+  return Math.max(leftColumnBottom, rightColumnBottom);
 }
 
 const TABLE_COLUMNS = [

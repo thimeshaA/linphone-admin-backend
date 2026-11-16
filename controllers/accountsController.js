@@ -7,6 +7,7 @@ const {
   reassignAccountCreator,
   renewAccount,
   disableAccount,
+  enableAccount,
   updateAccountPassword,
   deleteAccount,
 } = require('../models/accountModel');
@@ -20,14 +21,54 @@ const { getWalletByResellerId, adjustWalletBalance } = require('../models/wallet
 const { createLedgerEntry } = require('../models/walletLedgerModel');
 const { getRenewalCost } = require('../models/settingsModel');
 const { createNotification } = require('../models/notificationModel');
+const { createAuditLog } = require('../models/auditLogModel');
 const { sendMail } = require('../utils/mailer');
 const { renderBatchAccountRequestHtml, renderRenewalDeductionHtml } = require('../utils/emailTemplates');
-const { isValidEmail, isValidUsername } = require('../utils/validators');
+const { isValidEmail, isValidAuthid } = require('../utils/validators');
+const { resolveQrEncryptionKey, encryptQrContent, QrKeyError } = require('../utils/qrPayload');
+const { SIP_REALM } = require('../utils/sipRealm');
 
 const REQUEST_RECIPIENT = 'enigma-admin@prometeolk.com';
 
-function hashPassword(authid, domain, password) {
-  return crypto.createHash('md5').update(`${authid}:${domain}:${password}`).digest('hex');
+// Matches Ahmed's production hashing exactly: SHA-256 of
+// "<authid>:<realm>:<password>", UTF-8, lowercase hex. The realm is always
+// SIP_REALM, regardless of what domain (if any) the caller sent - see the
+// domain validation in create().
+function hashPassword(authid, password) {
+  return crypto.createHash('sha256').update(`${authid}:${SIP_REALM}:${password}`, 'utf8').digest('hex');
+}
+
+// Validated once up front, before any DB read or write for the request - a
+// misconfigured QR_ENCRYPTION_KEY must reject the request cleanly (no
+// account created, no password changed) rather than leave behind an account
+// or a new password whose QR could never be produced. The encryption call
+// made later (after the DB write) re-resolves the key itself; this is purely
+// a pre-flight check.
+function rejectIfQrKeyInvalid(res) {
+  try {
+    resolveQrEncryptionKey();
+    return false;
+  } catch (err) {
+    if (err instanceof QrKeyError) {
+      console.error('QR_ENCRYPTION_KEY is misconfigured:', err.message);
+      res.status(500).json({ error: 'Unable to process request: QR encryption key is not configured correctly' });
+      return true;
+    }
+    throw err;
+  }
+}
+
+// Called only after the account row already reflects the new credentials.
+// If this throws, the account/password change itself stays in effect - the
+// caller gets the normal success response without qrPayload, and an admin
+// can always reset the password later to obtain a fresh QR.
+function tryBuildQrPayload({ username, password }, context) {
+  try {
+    return encryptQrContent({ username, password });
+  } catch (err) {
+    console.error(`Failed to generate QR payload for ${context}:`, err.message);
+    return null;
+  }
 }
 
 // balanceUsd can be negative (a renewal always proceeds regardless of
@@ -44,6 +85,13 @@ function defaultExpiresAt() {
   const date = new Date();
   date.setMonth(date.getMonth() + 6);
   return date;
+}
+
+// Same conversion accountModel uses when writing scadenza, so comparisons
+// here match what actually gets stored.
+function toDateOnlyString(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toISOString().slice(0, 10);
 }
 
 function addMonths(date, months) {
@@ -132,21 +180,28 @@ async function getOne(req, res) {
 }
 
 async function create(req, res) {
-  const { authid, domain, password, status, expires_at, resellerId, email } = req.body;
+  const { authid, domain, password, phone, expires_at, resellerId, email } = req.body;
 
   const errors = {};
 
-  if (!isValidUsername(authid)) {
+  if (!isValidAuthid(authid)) {
     errors.authid =
-      'authid is required (1-64 characters) and may only contain letters, digits, ".", "_" and "-"';
+      'authid is required (1-20 characters) and may only contain letters, digits, ".", "_" and "-"';
   }
 
-  if (!domain) {
-    errors.domain = 'domain is required';
+  // domain is optional and, when sent, exists only so a caller can confirm
+  // what it'll be - there is one real SIP realm (SIP_REALM) and the account
+  // is always created against it, never against whatever the caller passed.
+  if (domain !== undefined && domain !== null && domain !== SIP_REALM) {
+    errors.domain = `domain must be "${SIP_REALM}" if provided`;
   }
 
   if (!password) {
     errors.password = 'password is required';
+  }
+
+  if (!phone) {
+    errors.phone = 'phone is required';
   }
 
   if (!isValidEmail(email)) {
@@ -155,6 +210,13 @@ async function create(req, res) {
 
   if (Object.keys(errors).length > 0) {
     return res.status(400).json({ errors });
+  }
+
+  res.set('Cache-Control', 'no-store');
+  res.set('Pragma', 'no-cache');
+
+  if (rejectIfQrKeyInvalid(res)) {
+    return undefined;
   }
 
   const { error: resellerError } = await validateResellerId(resellerId);
@@ -169,9 +231,9 @@ async function create(req, res) {
 
   const account = await createAccount({
     authid,
-    domain,
-    passwordHash: hashPassword(authid, domain, password),
-    status: status || 'active',
+    domain: SIP_REALM,
+    passwordHash: hashPassword(authid, password),
+    phone,
     expiresAt: expires_at || defaultExpiresAt(),
     creatorId: resellerId,
     email,
@@ -188,7 +250,28 @@ async function create(req, res) {
     console.error('Failed to send account credentials email:', err);
   }
 
-  return res.status(201).json(account);
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_create',
+    targetId: account.id,
+    ip: req.ip,
+  });
+
+  const qrPayload = tryBuildQrPayload({ username: account.authid, password }, `new account ${account.id}`);
+  const responseBody = { ...account };
+  if (qrPayload) {
+    responseBody.qrPayload = qrPayload;
+    await createAuditLog({
+      actorId: req.admin.id,
+      actorRole: req.admin.role,
+      action: 'account_qr_issued',
+      targetId: account.id,
+      ip: req.ip,
+    });
+  }
+
+  return res.status(201).json(responseBody);
 }
 
 async function reassign(req, res) {
@@ -203,6 +286,14 @@ async function reassign(req, res) {
   if (!account) {
     return res.status(404).json({ error: 'Account not found' });
   }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_reassign',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json(account);
 }
@@ -382,7 +473,10 @@ async function applyRenewalDeduction(account, actingAdminId, previousExpiresAt) 
 
 async function renew(req, res) {
   const { expires_at } = req.body;
-  const expiresAt = expires_at || defaultExpiresAt();
+
+  if (expires_at && Number.isNaN(new Date(expires_at).getTime())) {
+    return res.status(400).json({ error: 'expires_at must be a valid date' });
+  }
 
   // Captured before the update so the deduction can be priced off of how far
   // this renewal actually extends the account, not just the new expiry
@@ -392,12 +486,33 @@ async function renew(req, res) {
     return res.status(404).json({ error: 'Account not found' });
   }
 
+  // With no explicit date, extend 6 months from the current expiry - or from
+  // today if the account has already lapsed - so a renewal never discards
+  // remaining time.
+  const currentExpiry = new Date(existingAccount.expires_at);
+  const expiresAt = expires_at || addMonths(currentExpiry > new Date() ? currentExpiry : new Date(), 6);
+
+  // renewalUnitsForPeriod charges at least one unit, so a renewal that doesn't
+  // move the expiry forward would bill the reseller for nothing. Compared at
+  // the same date-only granularity accounts.scadenza is stored at.
+  if (toDateOnlyString(expiresAt) <= toDateOnlyString(existingAccount.expires_at)) {
+    return res.status(400).json({ error: 'expires_at must be later than the account\'s current expiry' });
+  }
+
   const account = await renewAccount(req.params.id, req.scopeFilter, expiresAt);
   if (!account) {
     return res.status(404).json({ error: 'Account not found' });
   }
 
   await applyRenewalDeduction(account, req.admin.id, existingAccount.expires_at);
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_renew',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json(account);
 }
@@ -407,6 +522,33 @@ async function disable(req, res) {
   if (!account) {
     return res.status(404).json({ error: 'Account not found' });
   }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_disable',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
+
+  return res.json(account);
+}
+
+// Deliberately separate from renew(): re-enabling only clears disabled_at and
+// never touches the expiry or the owning reseller's wallet.
+async function enable(req, res) {
+  const account = await enableAccount(req.params.id, req.scopeFilter);
+  if (!account) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_enable',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json(account);
 }
@@ -418,15 +560,43 @@ async function updatePassword(req, res) {
     return res.status(400).json({ error: 'password is required' });
   }
 
+  res.set('Cache-Control', 'no-store');
+  res.set('Pragma', 'no-cache');
+
+  if (rejectIfQrKeyInvalid(res)) {
+    return undefined;
+  }
+
   const account = await getAccountById(req.params.id, req.scopeFilter);
   if (!account) {
     return res.status(404).json({ error: 'Account not found' });
   }
 
-  const passwordHash = hashPassword(account.authid, account.domain, password);
+  const passwordHash = hashPassword(account.authid, password);
   await updateAccountPassword(req.params.id, req.scopeFilter, passwordHash);
 
-  return res.json({ message: 'Password updated successfully' });
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_password_update',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
+
+  const qrPayload = tryBuildQrPayload({ username: account.authid, password }, `account ${req.params.id} password change`);
+  const responseBody = { message: 'Password updated successfully' };
+  if (qrPayload) {
+    responseBody.qrPayload = qrPayload;
+    await createAuditLog({
+      actorId: req.admin.id,
+      actorRole: req.admin.role,
+      action: 'account_qr_issued',
+      targetId: req.params.id,
+      ip: req.ip,
+    });
+  }
+
+  return res.json(responseBody);
 }
 
 async function remove(req, res) {
@@ -434,6 +604,14 @@ async function remove(req, res) {
   if (!deleted) {
     return res.status(404).json({ error: 'Account not found' });
   }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_delete',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json({ message: 'Account deleted successfully' });
 }
@@ -445,6 +623,7 @@ module.exports = {
   reassign,
   renew,
   disable,
+  enable,
   updatePassword,
   remove,
   requestAccounts,

@@ -7,6 +7,9 @@ const {
   createReseller,
   updateResellerStatus,
   updateResellerEmail,
+  updateResellerAddress,
+  updateResellerLicenseDetail,
+  updateResellerPhone,
   updateResellerPassword,
   deleteReseller,
   renewReseller,
@@ -39,6 +42,31 @@ function defaultExpiresAt() {
   return date;
 }
 
+// address/license_detail/phone are all optional on both create and update -
+// only type/length checked (matching the license_detail/phone varchar column
+// widths - see scripts/ensure-additive-columns.js) so a value too long to
+// store fails with a clear 400 instead of a DB truncation error. Mutates
+// `errors` in place, consistent with the rest of this file's validation style.
+function validateCompanyProfileFields({ address, license_detail: licenseDetail, phone }, errors) {
+  if (address !== undefined && address !== null && typeof address !== 'string') {
+    errors.address = 'address must be a string';
+  }
+  if (licenseDetail !== undefined && licenseDetail !== null) {
+    if (typeof licenseDetail !== 'string') {
+      errors.license_detail = 'license_detail must be a string';
+    } else if (licenseDetail.length > 255) {
+      errors.license_detail = 'license_detail must be at most 255 characters';
+    }
+  }
+  if (phone !== undefined && phone !== null) {
+    if (typeof phone !== 'string') {
+      errors.phone = 'phone must be a string';
+    } else if (phone.length > 20) {
+      errors.phone = 'phone must be at most 20 characters';
+    }
+  }
+}
+
 async function list(req, res) {
   const { status } = req.query;
 
@@ -61,7 +89,8 @@ async function getOne(req, res) {
 }
 
 async function create(req, res) {
-  const { username, password, expires_at, email, initialCredit } = req.body;
+  const { username, password, expires_at, email, initialCredit, address, license_detail: licenseDetail, phone } =
+    req.body;
 
   const errors = {};
 
@@ -91,6 +120,8 @@ async function create(req, res) {
     errors.initialCredit = 'initialCredit must be a non-negative number';
   }
 
+  validateCompanyProfileFields({ address, license_detail: licenseDetail, phone }, errors);
+
   if (Object.keys(errors).length > 0) {
     return res.status(400).json({ errors });
   }
@@ -111,6 +142,9 @@ async function create(req, res) {
     passwordHash,
     expiresAt: expires_at || defaultExpiresAt(),
     email,
+    address,
+    licenseDetail,
+    phone,
   });
 
   const credit = initialCredit || 0;
@@ -124,6 +158,14 @@ async function create(req, res) {
       note: null,
     });
   }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'reseller_create',
+    targetId: reseller.id,
+    ip: req.ip,
+  });
 
   try {
     await sendMail({
@@ -148,18 +190,32 @@ async function renew(req, res) {
     return res.status(404).json({ error: 'Reseller not found' });
   }
 
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'reseller_renew',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
+
   return res.json(reseller);
 }
 
 async function update(req, res) {
-  const { status, email, username } = req.body;
+  const { status, email, username, address, license_detail: licenseDetail, phone } = req.body;
 
   if (username !== undefined) {
     return res.status(400).json({ errors: { username: 'username cannot be changed after creation' } });
   }
 
-  if (status === undefined && email === undefined) {
-    return res.status(400).json({ error: 'status or email is required' });
+  if (
+    status === undefined &&
+    email === undefined &&
+    address === undefined &&
+    licenseDetail === undefined &&
+    phone === undefined
+  ) {
+    return res.status(400).json({ error: 'status, email, address, license_detail, or phone is required' });
   }
 
   const errors = {};
@@ -171,6 +227,8 @@ async function update(req, res) {
   if (email !== undefined && !isValidEmail(email)) {
     errors.email = 'a valid email is required';
   }
+
+  validateCompanyProfileFields({ address, license_detail: licenseDetail, phone }, errors);
 
   if (Object.keys(errors).length > 0) {
     return res.status(400).json({ errors });
@@ -198,6 +256,35 @@ async function update(req, res) {
       return res.status(404).json({ error: 'Reseller not found' });
     }
   }
+
+  if (address !== undefined) {
+    updated = await updateResellerAddress(req.params.id, address);
+    if (!updated) {
+      return res.status(404).json({ error: 'Reseller not found' });
+    }
+  }
+
+  if (licenseDetail !== undefined) {
+    updated = await updateResellerLicenseDetail(req.params.id, licenseDetail);
+    if (!updated) {
+      return res.status(404).json({ error: 'Reseller not found' });
+    }
+  }
+
+  if (phone !== undefined) {
+    updated = await updateResellerPhone(req.params.id, phone);
+    if (!updated) {
+      return res.status(404).json({ error: 'Reseller not found' });
+    }
+  }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'reseller_update',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json(updated);
 }
@@ -244,6 +331,14 @@ async function remove(req, res) {
   if (!deleted) {
     return res.status(404).json({ error: 'Reseller not found' });
   }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'reseller_delete',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
 
   return res.json({ message: 'Reseller deleted successfully' });
 }
