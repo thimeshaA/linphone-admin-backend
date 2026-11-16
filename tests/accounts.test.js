@@ -243,6 +243,13 @@ function wireMocks() {
     return { ...row, status: computeStatus(row) };
   });
 
+  accountModel.enableAccount.mockImplementation(async (id, scopeFilter) => {
+    const row = scopedRow(Number(id), scopeFilter);
+    if (!row) return null;
+    row.disabled_at = null;
+    return { ...row, status: computeStatus(row) };
+  });
+
   accountModel.updateAccountPassword.mockImplementation(async (id, scopeFilter) => {
     const row = scopedRow(Number(id), scopeFilter);
     return !!row;
@@ -253,13 +260,6 @@ function wireMocks() {
     delete accountsById[Number(id)];
     return existed;
   });
-}
-
-function monthsFromNowCloseTo(date, months, toleranceDays = 1) {
-  const expected = new Date();
-  expected.setMonth(expected.getMonth() + months);
-  const diffMs = Math.abs(new Date(date).getTime() - expected.getTime());
-  return diffMs < toleranceDays * 24 * 60 * 60 * 1000;
 }
 
 // accounts.authid is a real varchar(20) column - a `${prefix}_${Date.now()}`
@@ -540,7 +540,8 @@ describe('Accounts flow (admin + reseller)', () => {
   });
 
   test('6. as admin: renew with a custom future date resets computed status to active', async () => {
-    const futureDate = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+    // Past the account's default ~6-month expiry, so this is a real extension.
+    const futureDate = new Date(Date.now() + 270 * 24 * 60 * 60 * 1000).toISOString();
 
     const res = await adminAgent.patch(`/api/accounts/${accountId}/renew`).send({ expires_at: futureDate });
 
@@ -553,11 +554,39 @@ describe('Accounts flow (admin + reseller)', () => {
     );
   });
 
-  test('7. as admin: renew with no body defaults expires_at to ~6 months out', async () => {
+  test('7. as admin: renew with no body extends 6 months from the current (not-yet-lapsed) expiry', async () => {
+    // Extends from the remaining expiry rather than from today, so no paid
+    // time is discarded.
+    const before = await adminAgent.get(`/api/accounts/${accountId}`);
+    const expected = new Date(before.body.expires_at);
+    expected.setMonth(expected.getMonth() + 6);
+
     const res = await adminAgent.patch(`/api/accounts/${accountId}/renew`).send({});
 
     expect(res.status).toBe(200);
-    expect(monthsFromNowCloseTo(res.body.expires_at, 6)).toBe(true);
+    expect(new Date(res.body.expires_at).toISOString().slice(0, 10)).toBe(expected.toISOString().slice(0, 10));
+  });
+
+  test('7b. as admin: renew to a date that is not later than the current expiry is rejected', async () => {
+    const before = await adminAgent.get(`/api/accounts/${accountId}`);
+
+    const sameRes = await adminAgent
+      .patch(`/api/accounts/${accountId}/renew`)
+      .send({ expires_at: before.body.expires_at });
+    expect(sameRes.status).toBe(400);
+
+    const earlier = new Date(before.body.expires_at);
+    earlier.setMonth(earlier.getMonth() - 1);
+    const earlierRes = await adminAgent
+      .patch(`/api/accounts/${accountId}/renew`)
+      .send({ expires_at: earlier.toISOString() });
+    expect(earlierRes.status).toBe(400);
+
+    const invalidRes = await adminAgent.patch(`/api/accounts/${accountId}/renew`).send({ expires_at: 'not-a-date' });
+    expect(invalidRes.status).toBe(400);
+
+    const after = await adminAgent.get(`/api/accounts/${accountId}`);
+    expect(after.body.expires_at).toEqual(before.body.expires_at);
   });
 
   test('8. as admin: disable sets disabled_at and status, leaves expires_at untouched', async () => {
@@ -684,6 +713,9 @@ describe('Accounts flow (admin + reseller)', () => {
 
     const disableRes = await resellerAgent.patch(`/api/accounts/${otherAccountId}/disable`);
     expect(disableRes.status).toBe(404);
+
+    const enableRes = await resellerAgent.patch(`/api/accounts/${otherAccountId}/enable`);
+    expect(enableRes.status).toBe(404);
 
     const passwordRes = await resellerAgent
       .patch(`/api/accounts/${otherAccountId}/password`)
@@ -956,7 +988,8 @@ describe('Renewal wallet deduction (Phase 2)', () => {
     walletsByResellerId[deepDebtReseller.id].balance_usd = -100000;
     const balanceBefore = walletsByResellerId[deepDebtReseller.id].balance_usd;
 
-    const newExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    // Past the account's default ~6-month expiry, so this is a real extension.
+    const newExpiresAt = new Date(Date.now() + 300 * 24 * 60 * 60 * 1000).toISOString();
     const res = await adminAgent
       .patch(`/api/accounts/${deepDebtAccount.id}/renew`)
       .send({ expires_at: newExpiresAt });
@@ -1082,6 +1115,44 @@ describe('Renewal wallet deduction (Phase 2)', () => {
       propAccount = res.body;
 
       expect(walletsByResellerId[propReseller.id].balance_usd).toBe(balanceBefore - 30);
+    });
+  });
+
+  describe('re-enabling a disabled account', () => {
+    let enableAccount;
+
+    beforeAll(async () => {
+      enableAccount = await createAccount({ authid: uniqueAuthid('e'), resellerId: reseller.id });
+      const disableRes = await adminAgent.patch(`/api/accounts/${enableAccount.id}/disable`);
+      expect(disableRes.status).toBe(200);
+      expect(disableRes.body.status).toBe('disabled');
+    });
+
+    test('clears disabled_at, keeps the expiry, and never touches the wallet or ledger', async () => {
+      const balanceBefore = walletsByResellerId[reseller.id].balance_usd;
+      const ledgerCountBefore = ledgerEntries.length;
+      auditLogModel.createAuditLog.mockClear();
+
+      const res = await adminAgent.patch(`/api/accounts/${enableAccount.id}/enable`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.disabled_at).toBeNull();
+      expect(res.body.status).toBe('active');
+      expect(res.body.expires_at).toEqual(enableAccount.expires_at);
+
+      expect(walletsByResellerId[reseller.id].balance_usd).toBe(balanceBefore);
+      expect(ledgerEntries.length).toBe(ledgerCountBefore);
+      expect(auditLogModel.createAuditLog).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'account_enable', targetId: String(enableAccount.id) })
+      );
+      expect(auditLogModel.createAuditLog).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'account_renew' })
+      );
+    });
+
+    test('returns 404 for an account that does not exist', async () => {
+      const res = await adminAgent.patch('/api/accounts/999999/enable');
+      expect(res.status).toBe(404);
     });
   });
 });

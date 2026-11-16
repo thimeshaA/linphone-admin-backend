@@ -7,6 +7,7 @@ const {
   reassignAccountCreator,
   renewAccount,
   disableAccount,
+  enableAccount,
   updateAccountPassword,
   deleteAccount,
 } = require('../models/accountModel');
@@ -84,6 +85,13 @@ function defaultExpiresAt() {
   const date = new Date();
   date.setMonth(date.getMonth() + 6);
   return date;
+}
+
+// Same conversion accountModel uses when writing scadenza, so comparisons
+// here match what actually gets stored.
+function toDateOnlyString(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toISOString().slice(0, 10);
 }
 
 function addMonths(date, months) {
@@ -465,7 +473,10 @@ async function applyRenewalDeduction(account, actingAdminId, previousExpiresAt) 
 
 async function renew(req, res) {
   const { expires_at } = req.body;
-  const expiresAt = expires_at || defaultExpiresAt();
+
+  if (expires_at && Number.isNaN(new Date(expires_at).getTime())) {
+    return res.status(400).json({ error: 'expires_at must be a valid date' });
+  }
 
   // Captured before the update so the deduction can be priced off of how far
   // this renewal actually extends the account, not just the new expiry
@@ -473,6 +484,19 @@ async function renew(req, res) {
   const existingAccount = await getAccountById(req.params.id, req.scopeFilter);
   if (!existingAccount) {
     return res.status(404).json({ error: 'Account not found' });
+  }
+
+  // With no explicit date, extend 6 months from the current expiry - or from
+  // today if the account has already lapsed - so a renewal never discards
+  // remaining time.
+  const currentExpiry = new Date(existingAccount.expires_at);
+  const expiresAt = expires_at || addMonths(currentExpiry > new Date() ? currentExpiry : new Date(), 6);
+
+  // renewalUnitsForPeriod charges at least one unit, so a renewal that doesn't
+  // move the expiry forward would bill the reseller for nothing. Compared at
+  // the same date-only granularity accounts.scadenza is stored at.
+  if (toDateOnlyString(expiresAt) <= toDateOnlyString(existingAccount.expires_at)) {
+    return res.status(400).json({ error: 'expires_at must be later than the account\'s current expiry' });
   }
 
   const account = await renewAccount(req.params.id, req.scopeFilter, expiresAt);
@@ -503,6 +527,25 @@ async function disable(req, res) {
     actorId: req.admin.id,
     actorRole: req.admin.role,
     action: 'account_disable',
+    targetId: req.params.id,
+    ip: req.ip,
+  });
+
+  return res.json(account);
+}
+
+// Deliberately separate from renew(): re-enabling only clears disabled_at and
+// never touches the expiry or the owning reseller's wallet.
+async function enable(req, res) {
+  const account = await enableAccount(req.params.id, req.scopeFilter);
+  if (!account) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+
+  await createAuditLog({
+    actorId: req.admin.id,
+    actorRole: req.admin.role,
+    action: 'account_enable',
     targetId: req.params.id,
     ip: req.ip,
   });
@@ -580,6 +623,7 @@ module.exports = {
   reassign,
   renew,
   disable,
+  enable,
   updatePassword,
   remove,
   requestAccounts,

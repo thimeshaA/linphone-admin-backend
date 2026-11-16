@@ -12,6 +12,7 @@ const {
   reassignAccountCreator,
   renewAccount,
   disableAccount,
+  enableAccount,
   updateAccountPassword,
   deleteAccount,
 } = require('../models/accountModel');
@@ -98,7 +99,7 @@ describe('accountModel (against a fake accounts table)', () => {
         const [id] = params;
         const row = rowsById[id];
         if (!row) return [{ affectedRows: 0 }];
-        row.disabled_at = new Date();
+        row.disabled_at = sql.includes('disabled_at = NULL') ? null : new Date();
         return [{ affectedRows: 1 }];
       }
 
@@ -268,6 +269,20 @@ describe('accountModel (against a fake accounts table)', () => {
     test('expired: scadenza in the past, not disabled', async () => {
       const account = await seed({ scadenzaOffsetDays: -1 });
       expect(account.status).toBe('expired');
+    });
+
+    test('enableAccount clears disabled_at and leaves scadenza unchanged', async () => {
+      const disabled = await seed({ scadenzaOffsetDays: 30, disabled: true });
+
+      const enabled = await enableAccount(disabled.id, {});
+
+      expect(enabled.disabled_at).toBeNull();
+      expect(enabled.status).toBe('active');
+      expect(enabled.expires_at).toBe(disabled.expires_at);
+    });
+
+    test('enableAccount returns null for a missing account', async () => {
+      expect(await enableAccount(999, {})).toBeNull();
     });
 
     test('disabled: disabled_at set, even with a future scadenza', async () => {

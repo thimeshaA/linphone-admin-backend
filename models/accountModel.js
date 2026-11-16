@@ -146,6 +146,19 @@ async function disableAccount(id, scopeFilter) {
   return getAccountById(id, scopeFilter);
 }
 
+// Clears disabled_at only - scadenza is untouched, so the account resumes its
+// existing expiry and no renewal (and so no wallet deduction) is involved.
+async function enableAccount(id, scopeFilter) {
+  const { condition, params } = buildScopedWhereClause(scopeFilter);
+  const [result] = await flexisipPool.query(
+    `UPDATE accounts SET disabled_at = NULL WHERE registerID = ? AND ${condition}`,
+    [id, ...params]
+  );
+
+  if (result.affectedRows === 0) return null;
+  return getAccountById(id, scopeFilter);
+}
+
 // algorithm is rewritten explicitly on every password change too, same as on
 // creation - never rely on whatever the row already had (e.g. a legacy
 // 'MD5' row gets corrected to 'SHA-256' the moment its password is reset).
@@ -174,6 +187,7 @@ module.exports = {
   reassignAccountCreator,
   renewAccount,
   disableAccount,
+  enableAccount,
   updateAccountPassword,
   deleteAccount,
 };
