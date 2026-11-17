@@ -26,6 +26,8 @@ services:
       - NODE_ENV=production
     ports:
       - "127.0.0.1:8083:4000"
+    mem_limit: 512m
+    cpus: 1
     restart: unless-stopped
     networks:
       - admin-panel-net
@@ -57,6 +59,8 @@ services:
       - BACKEND_URL=http://admin-backend:4000
     ports:
       - "127.0.0.1:8084:3000"
+    mem_limit: 512m
+    cpus: 1
     restart: unless-stopped
     depends_on:
       - backend

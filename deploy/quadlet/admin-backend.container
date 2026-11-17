@@ -15,6 +15,7 @@ After=network-online.target
 ContainerName=admin-backend
 Image=localhost/admin-backend:CHANGE_ME_TAG
 PublishPort=127.0.0.1:8083:4000
+PodmanArgs=--memory=512m --cpus=1
 Network=admin-panel.network
 EnvironmentFile=%h/.config/admin-panel/backend.env
 Environment=NODE_ENV=production

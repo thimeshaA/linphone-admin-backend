@@ -16,6 +16,7 @@ After=admin-backend.service
 ContainerName=admin-frontend
 Image=localhost/admin-frontend:CHANGE_ME_TAG
 PublishPort=127.0.0.1:8084:3000
+PodmanArgs=--memory=512m --cpus=1
 Network=admin-panel.network
 EnvironmentFile=%h/.config/admin-panel/frontend.env
 # Backend by container name on the shared network (container port, not 8083).
