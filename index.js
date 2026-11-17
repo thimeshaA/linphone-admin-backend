@@ -31,7 +31,8 @@ function checkPool(pool) {
 }
 
 // Exactly one reverse proxy (nginx) sits in front of this app in every real
-// deployment (see deploy/: nginx -> 127.0.0.1:8083 -> container:4000).
+// deployment (see deploy/: nginx -> 127.0.0.1:9083 -> container:4000 in
+// production; local compose publishes 8083 instead).
 // Trusting exactly 1 hop means X-Forwarded-For is honored for the client IP
 // that express-rate-limit keys on, but only the value nginx itself supplied -
 // a client can't append extra spoofed hops to escape rate limiting.
@@ -93,8 +94,13 @@ app.use((err, req, res, next) => {
 module.exports = app;
 
 if (require.main === module) {
-  const { flexisipPool } = require('./config/db');
   const { ensureAccountsSchema } = require('./db/ensureAccountsSchema');
+  const { createShutdownHandler } = require('./utils/gracefulShutdown');
+
+  let server = null;
+  const shutdown = createShutdownHandler({ server: () => server, pools: [flexisipPool, adminPool] });
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 
   (async () => {
     try {
@@ -113,6 +119,6 @@ if (require.main === module) {
     }
 
     const PORT = process.env.PORT || 4000;
-    app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+    server = app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
   })();
 }
