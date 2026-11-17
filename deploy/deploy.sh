@@ -16,16 +16,17 @@
 #      passes, restores the previous Image= tag, restarts, and exits 1
 #   6. on success: podman image prune -f, keeping the KEEP_IMAGES newest tags
 #
-# Settings - each one is resolved in this order (first wins):
-#   a) the command line, for a one-off:  SIP_DOMAIN=... deploy/deploy.sh frontend
-#   b) ~/.config/admin-panel/deploy.env, if it exists - plain shell assignments,
-#      not committed, e.g.:
-#        SIP_DOMAIN=sip.example.invalid
-#        PROJECT_ROOT=/srv/admin-panel-project
-#   c) the defaults below
-# Keep server-specific values in deploy.env rather than editing this file: it
-# is tracked in the backend repo, and a local edit would make `git pull
-# --ff-only` fail once a commit touches it.
+# NEXT_PUBLIC_SIP_DOMAIN (frontend only - it's baked into the build):
+#   read from the NEXT_PUBLIC_SIP_DOMAIN= line of ~/.config/admin-panel/frontend.env,
+#   the same file the frontend unit uses as its EnvironmentFile=. Only that one
+#   line is read; the file is never sourced. The deploy stops if the file,
+#   the line or its value is missing. Override it for a one-off with:
+#     NEXT_PUBLIC_SIP_DOMAIN=... deploy/deploy.sh frontend
+#
+# The other settings below can likewise be overridden on the command line
+# (e.g. HEALTH_TIMEOUT=120 deploy/deploy.sh backend). Don't edit them in this
+# file on the server: it is tracked in the backend repo, and a local edit
+# would make `git pull --ff-only` fail once a commit touches it.
 #
 # Requires on the server: git, podman, curl, and a systemd user session
 # (log in over SSH as the deploy user; `su`/`sudo -u` don't provide one).
@@ -33,13 +34,12 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-/srv/admin-panel-project}"
-SIP_DOMAIN="${SIP_DOMAIN:-CHANGE_ME}"
+NEXT_PUBLIC_SIP_DOMAIN="${NEXT_PUBLIC_SIP_DOMAIN:-}"
 UNIT_DIR="${UNIT_DIR:-$HOME/.config/containers/systemd}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"
 KEEP_IMAGES="${KEEP_IMAGES:-3}"
 
-SETTINGS_FILE="$HOME/.config/admin-panel/deploy.env"
-SETTINGS_VARS='PROJECT_ROOT|SIP_DOMAIN|UNIT_DIR|HEALTH_TIMEOUT|KEEP_IMAGES'
+FRONTEND_ENV_FILE="$HOME/.config/admin-panel/frontend.env"
 
 step_no=0
 step() {
@@ -58,18 +58,34 @@ usage() {
   exit 2
 }
 
-load_settings() {
-  [[ -f "$SETTINGS_FILE" ]] || return 0
-  # Variables passed on the command line are exported; the defaults above are
-  # not. Snapshot the exported ones, let the file override, then put the
-  # command-line values back so a one-off override still beats the file.
-  local cli_overrides
-  # (-gx so re-declaring them inside this function doesn't make them local.)
-  cli_overrides="$(export -p | grep -E "^declare -x ($SETTINGS_VARS)=" | sed 's/^declare -x /declare -gx /' || true)"
-  # shellcheck source=/dev/null
-  source "$SETTINGS_FILE"
-  eval "$cli_overrides"
-  echo "Loaded settings from $SETTINGS_FILE"
+# Sets NEXT_PUBLIC_SIP_DOMAIN from the command line if given, otherwise from
+# its line in FRONTEND_ENV_FILE. Parses just that line (last one wins, as with
+# podman --env-file) instead of sourcing the file, so nothing else in it is
+# executed or leaks into this script.
+resolve_sip_domain() {
+  if [[ -n "$NEXT_PUBLIC_SIP_DOMAIN" ]]; then
+    echo "NEXT_PUBLIC_SIP_DOMAIN=$NEXT_PUBLIC_SIP_DOMAIN (from the command line)"
+    return
+  fi
+
+  [[ -f "$FRONTEND_ENV_FILE" ]] \
+    || die "$FRONTEND_ENV_FILE not found - create it with a NEXT_PUBLIC_SIP_DOMAIN=<sip-domain> line"
+
+  local line value
+  line="$(grep -E '^[[:space:]]*NEXT_PUBLIC_SIP_DOMAIN=' "$FRONTEND_ENV_FILE" | tail -n 1 || true)"
+  [[ -n "$line" ]] \
+    || die "NEXT_PUBLIC_SIP_DOMAIN is missing from $FRONTEND_ENV_FILE - add a NEXT_PUBLIC_SIP_DOMAIN=<sip-domain> line"
+
+  value="${line#*=}"
+  value="${value%$'\r'}"
+  # Drop one pair of surrounding quotes, if present.
+  if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then
+    value="${BASH_REMATCH[1]}"
+  fi
+  [[ -n "$value" ]] || die "NEXT_PUBLIC_SIP_DOMAIN is empty in $FRONTEND_ENV_FILE"
+
+  NEXT_PUBLIC_SIP_DOMAIN="$value"
+  echo "NEXT_PUBLIC_SIP_DOMAIN=$NEXT_PUBLIC_SIP_DOMAIN (from $FRONTEND_ENV_FILE)"
 }
 
 health_check() {
@@ -101,8 +117,6 @@ restart_service() {
 }
 
 main() {
-  load_settings
-
   [[ $# -eq 1 ]] || usage
   name="$1"
   case "$name" in
@@ -125,8 +139,8 @@ main() {
   grep -q '^Image=' "$unit_file" || die "no Image= line in $unit_file"
   systemctl --user show-environment >/dev/null 2>&1 \
     || die "no systemd user session - log in over SSH as the deploy user (not su/sudo)"
-  if [[ "$name" == frontend && ( -z "$SIP_DOMAIN" || "$SIP_DOMAIN" == CHANGE_ME ) ]]; then
-    die "SIP_DOMAIN is not set - add it to $SETTINGS_FILE"
+  if [[ "$name" == frontend ]]; then
+    resolve_sip_domain
   fi
 
   step "Pulling $repo_dir"
@@ -148,7 +162,7 @@ main() {
   step "Building $image_repo:$tag"
   local build_args=()
   if [[ "$name" == frontend ]]; then
-    build_args+=(--build-arg "NEXT_PUBLIC_SIP_DOMAIN=$SIP_DOMAIN")
+    build_args+=(--build-arg "NEXT_PUBLIC_SIP_DOMAIN=$NEXT_PUBLIC_SIP_DOMAIN")
   fi
   podman build ${build_args[@]+"${build_args[@]}"} -t "$image_repo:$tag" -f Containerfile .
 
